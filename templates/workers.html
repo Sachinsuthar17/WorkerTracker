@@ -26,6 +26,10 @@
                     <option value="Maintenance">Maintenance</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="token_id">Token ID</label>
+                <input type="text" id="token_id" name="token_id" placeholder="Unique token ID (used for QR)" required>
+            </div>
             <div class="form-actions">
                 <button type="submit" class="btn-primary">
                     <i class="fas fa-plus"></i>
@@ -52,6 +56,7 @@
                         <th>Department</th>
                         <th>Status</th>
                         <th>Created At</th>
+                        <th>QR Code</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -68,11 +73,19 @@
                             <span class="department-tag">{{ worker[2] }}</span>
                         </td>
                         <td>
-                            <span class="status-badge {{ 'active' if worker[3] == 'active' else 'inactive' }}">
-                                {{ worker[3] }}
+                            <span class="status-badge {{ 'active' if worker[4] == 'active' else 'inactive' }}">
+                                {{ worker[4] }}
                             </span>
                         </td>
-                        <td>{{ worker[4] }}</td>
+                        <td>{{ worker[5] }}</td>
+                        <td>
+                            {% if worker[3] %}
+                            <img src="{{ url_for('static', filename='qrcodes/' + worker[3] + '.png') }}"
+                                 alt="QR" width="60">
+                            {% else %}
+                            N/A
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>

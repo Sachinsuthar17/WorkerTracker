@@ -80,10 +80,23 @@
                         <td>{{ worker[5] }}</td>
                         <td>
                             {% if worker[3] %}
-                                <object data="{{ url_for('static', filename='qrcodes/' + worker[3]|e + '.svg') }}"
-                                        type="image/svg+xml" width="60" height="60">
-                                    QR Not Visible
-                                </object>
+                            <div class="qr-actions">
+                                <img src="{{ url_for('static', filename='qrcodes/' + worker[3] + '.svg') }}"
+                                     alt="QR Code"
+                                     width="60"
+                                     onclick="openPrintWindow('{{ url_for('static', filename='qrcodes/' + worker[3] + '.svg') }}')"
+                                     style="cursor:pointer; border:1px solid #ddd; border-radius:4px;">
+
+                                <div class="qr-buttons" style="margin-top: 5px;">
+                                    <a href="{{ url_for('static', filename='qrcodes/' + worker[3] + '.svg') }}"
+                                       download="{{ worker[3] }}.svg"
+                                       class="btn btn-sm">Download</a>
+                                    <button type="button" class="btn btn-sm"
+                                            onclick="openPrintWindow('{{ url_for('static', filename='qrcodes/' + worker[3] + '.svg') }}')">
+                                        Print
+                                    </button>
+                                </div>
+                            </div>
                             {% else %}
                                 N/A
                             {% endif %}
@@ -95,4 +108,26 @@
         </div>
     </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openPrintWindow(url) {
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+        <html>
+        <head><title>Print QR</title></head>
+        <body style="text-align:center; margin-top:50px;">
+            <img src="${url}" style="width:300px;" />
+            <script>
+                window.onload = function() {
+                    setTimeout(() => window.print(), 500);
+                };
+            <\/script>
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+}
+</script>
 {% endblock %}

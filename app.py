@@ -5,7 +5,8 @@ import csv
 import io
 import os
 from datetime import datetime
-import qrcode.image.svg
+import qrcode
+import qrcode.image.svg  # NEW: for SVG QR generation
 
 app = Flask(__name__)
 CORS(app)
@@ -18,7 +19,7 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Workers table with token_id for QR
+    # Workers table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +55,7 @@ def init_db():
         )
     """)
 
-    # Scan logs for QR login
+    # Scan logs
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +73,6 @@ init_db()
 def dashboard():
     return render_template('dashboard.html')
 
-# Workers
 @app.route('/workers')
 def workers():
     conn = sqlite3.connect(DB_FILE)
@@ -95,11 +95,11 @@ def add_worker():
                        (name, department, token_id))
         conn.commit()
 
-        # Generate QR code as SVG (no Pillow needed)
+        # Generate QR code as SVG
         factory = qrcode.image.svg.SvgImage
         img = qrcode.make(token_id, image_factory=factory)
-        qr_path = os.path.join(QR_DIR, f"{token_id}.svg")
-        with open(qr_path, 'w') as f:
+        svg_path = os.path.join(QR_DIR, f"{token_id}.svg")
+        with open(svg_path, "wb") as f:
             img.save(f)
 
     except sqlite3.IntegrityError:
@@ -109,7 +109,6 @@ def add_worker():
 
     return redirect(url_for('workers'))
 
-# QR SCAN endpoint for ESP32
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.get_json()
@@ -132,7 +131,6 @@ def scan():
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
-# Operations
 @app.route('/operations')
 def operations():
     conn = sqlite3.connect(DB_FILE)
@@ -158,7 +156,6 @@ def add_operation():
 
     return redirect(url_for('operations'))
 
-# Production
 @app.route('/production')
 def production():
     conn = sqlite3.connect(DB_FILE)
@@ -198,7 +195,6 @@ def add_production():
 
     return redirect(url_for('production'))
 
-# Reports
 @app.route('/reports')
 def reports():
     return render_template('reports.html')
@@ -231,12 +227,10 @@ def download_report():
 
     return response
 
-# Settings
 @app.route('/settings')
 def settings():
     return render_template('settings.html')
 
-# API
 @app.route('/api/stats')
 def get_stats():
     conn = sqlite3.connect(DB_FILE)

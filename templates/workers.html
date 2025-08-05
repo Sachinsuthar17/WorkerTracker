@@ -80,8 +80,10 @@
                         <td>{{ worker[5] }}</td>
                         <td>
                             {% if worker[3] %}
-                                <img src="{{ url_for('static', filename='qrcodes/' + worker[3]|e + '.png') }}"
-                                     alt="QR Code" width="60" onerror="this.onerror=null;this.src='/static/placeholder.png';">
+                                <object data="{{ url_for('static', filename='qrcodes/' + worker[3]|e + '.svg') }}"
+                                        type="image/svg+xml" width="60" height="60">
+                                    QR Not Visible
+                                </object>
                             {% else %}
                                 N/A
                             {% endif %}

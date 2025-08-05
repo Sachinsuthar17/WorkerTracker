@@ -79,6 +79,25 @@
                 sidebar.classList.toggle('show');
             });
         }
+
+        // Print QR function
+        function openPrintWindow(url) {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head><title>Print QR</title></head>
+                <body style="text-align: center; margin-top: 50px;">
+                    <img src="${url}" style="width: 300px;" />
+                    <script>
+                        window.onload = function() {
+                            setTimeout(() => window.print(), 500);
+                        };
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
     </script>
 </body>
 </html>

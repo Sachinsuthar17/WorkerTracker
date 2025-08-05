@@ -43,7 +43,7 @@ function renderStatsCards(stats) {
 
     statsGrid.innerHTML = '';
 
-    const icons = ['chart-line', 'users', 'percentage', 'dollar-sign'];
+    const icons = ['chart-line', 'users', 'percentage', 'rupee-sign'];
     const colors = [
         'linear-gradient(135deg, #3b82f6, #1d4ed8)',
         'linear-gradient(135deg, #06b6d4, #0891b2)',

@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header class="page-header">
+    <h1>Workers Management</h1>
+    <p>Manage your production workers and their departments</p>
+</header>
+
+<!-- Add Worker Form -->
+<section class="form-section">
+    <div class="form-card">
+        <h3>Add New Worker</h3>
+        <form method="POST" action="{{ url_for('add_worker') }}" class="form-grid">
+            <div class="form-group">
+                <label for="name">Worker Name</label>
+                <input type="text" id="name" name="name" placeholder="Enter worker name" required>
+            </div>
+            <div class="form-group">
+                <label for="department">Department</label>
+                <select id="department" name="department" required>
+                    <option value="">Select Department</option>
+                    <option value="Production">Production</option>
+                    <option value="Quality">Quality</option>
+                    <option value="Assembly">Assembly</option>
+                    <option value="Packaging">Packaging</option>
+                    <option value="Maintenance">Maintenance</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">
+                    <i class="fas fa-plus"></i>
+                    Add Worker
+                </button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<!-- Workers List -->
+<section class="table-section">
+    <div class="table-card">
+        <div class="table-header">
+            <h3>All Workers</h3>
+            <span class="table-count">{{ workers|length }} workers</span>
+        </div>
+        <div class="table-container">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Department</th>
+                        <th>Status</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for worker in workers %}
+                    <tr>
+                        <td>{{ worker[0] }}</td>
+                        <td>
+                            <div class="worker-info">
+                                <i class="fas fa-user-circle"></i>
+                                {{ worker[1] }}
+                            </div>
+                        </td>
+                        <td>
+                            <span class="department-tag">{{ worker[2] }}</span>
+                        </td>
+                        <td>
+                            <span class="status-badge {{ 'active' if worker[3] == 'active' else 'inactive' }}">
+                                {{ worker[3] }}
+                            </span>
+                        </td>
+                        <td>{{ worker[4] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endblock %}

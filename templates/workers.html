@@ -80,10 +80,10 @@
                         <td>{{ worker[5] }}</td>
                         <td>
                             {% if worker[3] %}
-                            <img src="{{ url_for('static', filename='qrcodes/' + worker[3] + '.png') }}"
-                                 alt="QR" width="60">
+                                <img src="{{ url_for('static', filename='qrcodes/' + worker[3]|e + '.png') }}"
+                                     alt="QR Code" width="60" onerror="this.onerror=null;this.src='/static/placeholder.png';">
                             {% else %}
-                            N/A
+                                N/A
                             {% endif %}
                         </td>
                     </tr>

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify, make_response
+from flask import Flask, render_template, redirect, url_for, request, jsonify, make_response, Response
 from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
@@ -14,9 +14,6 @@ CORS(app)
 
 # Get DB URL from Render environment variables
 DB_URL = os.getenv("DATABASE_URL")
-
-QR_DIR = os.path.join("static", "qrcodes")
-os.makedirs(QR_DIR, exist_ok=True)
 
 def get_conn():
     return psycopg2.connect(DB_URL, sslmode="require")
@@ -101,14 +98,6 @@ def add_worker():
         cursor.execute('INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)',
                        (name, department, token_id))
         conn.commit()
-
-        # Generate QR code as SVG
-        factory = qrcode.image.svg.SvgImage
-        img = qrcode.make(token_id, image_factory=factory)
-        svg_path = os.path.join(QR_DIR, f"{token_id}.svg")
-        with open(svg_path, "wb") as f:
-            img.save(f)
-
     except psycopg2.IntegrityError:
         conn.rollback()
         return "Error: Token ID must be unique", 400
@@ -116,6 +105,15 @@ def add_worker():
         conn.close()
 
     return redirect(url_for('workers'))
+
+# ---- Dynamic QR code ----
+@app.route('/qr/<token_id>')
+def qr_code(token_id):
+    factory = qrcode.image.svg.SvgImage
+    img = qrcode.make(token_id, image_factory=factory)
+    stream = io.BytesIO()
+    img.save(stream)
+    return Response(stream.getvalue(), mimetype='image/svg+xml')
 
 # ---- Scans ----
 @app.route('/scan', methods=['POST'])

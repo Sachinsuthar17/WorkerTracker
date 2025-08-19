@@ -73,10 +73,13 @@ def init_db():
 
 init_db()
 
+# ---------------- ROUTES ---------------- #
+
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
 
+# ---- Workers ----
 @app.route('/workers')
 def workers():
     conn = get_conn()
@@ -114,6 +117,7 @@ def add_worker():
 
     return redirect(url_for('workers'))
 
+# ---- Scans ----
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.get_json()
@@ -136,12 +140,111 @@ def scan():
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
-# (the rest of your routes stay the same — just replace sqlite3 with get_conn())
+# ---- Operations ----
+@app.route('/operations')
+def operations():
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, name, description, created_at FROM operations ORDER BY created_at DESC')
+    operations = cursor.fetchall()
+    conn.close()
+    return render_template('operations.html', operations=operations)
 
+@app.route('/add_operation', methods=['POST'])
+def add_operation():
+    name = request.form['name']
+    description = request.form.get('description', '')
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('INSERT INTO operations (name, description) VALUES (%s, %s)', (name, description))
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+    conn.close()
+
+    return redirect(url_for('operations'))
+
+# ---- Production ----
+@app.route('/production')
+def production():
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT id, name FROM workers WHERE status = %s', ('active',))
+    workers = cursor.fetchall()
+
+    cursor.execute('SELECT id, name FROM operations')
+    operations = cursor.fetchall()
+
+    cursor.execute("""
+        SELECT pl.id, w.name, o.name, pl.quantity, pl.timestamp, pl.status
+        FROM production_logs pl
+        JOIN workers w ON pl.worker_id = w.id
+        JOIN operations o ON pl.operation_id = o.id
+        ORDER BY pl.timestamp DESC
+        LIMIT 50
+    """)
+    logs = cursor.fetchall()
+
+    conn.close()
+    return render_template('production.html', workers=workers, operations=operations, logs=logs)
+
+@app.route('/add_production', methods=['POST'])
+def add_production():
+    worker_id = request.form['worker_id']
+    operation_id = request.form['operation_id']
+    quantity = request.form.get('quantity', 1)
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO production_logs (worker_id, operation_id, quantity) VALUES (%s, %s, %s)', 
+                   (worker_id, operation_id, quantity))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('production'))
+
+# ---- Reports ----
+@app.route('/reports')
+def reports():
+    return render_template('reports.html')
+
+@app.route('/download_report')
+def download_report():
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT w.name, w.department, o.name, 
+               pl.quantity, pl.timestamp, pl.status
+        FROM production_logs pl
+        JOIN workers w ON pl.worker_id = w.id
+        JOIN operations o ON pl.operation_id = o.id
+        ORDER BY pl.timestamp DESC
+    """)
+
+    logs = cursor.fetchall()
+    conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Worker Name', 'Department', 'Operation', 'Quantity', 'Timestamp', 'Status'])
+    writer.writerows(logs)
+
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'text/csv'
+    response.headers['Content-Disposition'] = f'attachment; filename=production_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+
+    return response
+
+# ---- Health Check ----
 @app.route('/health')
 def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
+# ---------------- RUN ---------------- #
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(debug=False, host='0.0.0.0', port=port)

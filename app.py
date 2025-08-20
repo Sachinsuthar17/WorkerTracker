@@ -12,8 +12,11 @@ import qrcode.image.svg
 app = Flask(__name__)
 CORS(app)
 
-# Get DB URL from Render environment variables
+# Database connection string (from Render environment)
 DB_URL = os.getenv("DATABASE_URL")
+
+# Device shared secret for ESP32 authentication
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
 
 def get_conn():
     return psycopg2.connect(DB_URL, sslmode="require")
@@ -81,7 +84,7 @@ def dashboard():
 def workers():
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, department, token_id FROM workers ORDER BY created_at DESC')
+    cursor.execute('SELECT id, name, department, token_id, status, created_at FROM workers ORDER BY created_at DESC')
     workers = cursor.fetchall()
     conn.close()
     return render_template('workers.html', workers=workers)
@@ -120,20 +123,47 @@ def qr_code(token_id):
 def scan():
     data = request.get_json()
     token_id = data.get('token_id')
+    secret = data.get('secret')
 
-    if not token_id:
-        return jsonify({'status': 'error', 'message': 'Missing token_id'}), 400
+    if not token_id or not secret:
+        return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
+
+    if secret != DEVICE_SECRET:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
 
     conn = get_conn()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute('SELECT * FROM workers WHERE token_id = %s', (token_id,))
     worker = cursor.fetchone()
 
     if worker:
+        # Log the scan
         cursor.execute('INSERT INTO scan_logs (token_id) VALUES (%s)', (token_id,))
         conn.commit()
+
+        # Count today's scans
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM scan_logs 
+            WHERE token_id = %s 
+              AND DATE(scanned_at) = CURRENT_DATE
+        """, (token_id,))
+        scans_today = cursor.fetchone()[0]
+
+        # Example per piece rate — can be made dynamic later
+        rate_per_piece = 5.0
+        earnings = scans_today * rate_per_piece
+
         conn.close()
-        return jsonify({'status': 'success', 'message': 'Scan logged'})
+        return jsonify({
+            'status': 'success',
+            'message': 'Scan logged',
+            'name': worker['name'],
+            'department': worker['department'],
+            'scans_today': scans_today,
+            'earnings': earnings
+        })
+
     else:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404

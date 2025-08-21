@@ -126,10 +126,24 @@ def scan():
     secret = data.get('secret')
 
     if not token_id or not secret:
-        return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing token_id or secret',
+            'name': '',
+            'department': '',
+            'scans_today': 0,
+            'earnings': 0.0
+        }), 400
 
     if secret != DEVICE_SECRET:
-        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+        return jsonify({
+            'status': 'error',
+            'message': 'Unauthorized',
+            'name': '',
+            'department': '',
+            'scans_today': 0,
+            'earnings': 0.0
+        }), 403
 
     conn = get_conn()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -166,7 +180,14 @@ def scan():
 
     else:
         conn.close()
-        return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
+        return jsonify({
+            'status': 'error',
+            'message': 'Invalid token_id',
+            'name': '',
+            'department': '',
+            'scans_today': 0,
+            'earnings': 0.0
+        }), 404
 
 # ---- Operations ----
 @app.route('/operations')

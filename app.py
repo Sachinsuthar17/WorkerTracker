@@ -4,6 +4,7 @@ import psycopg2
 import psycopg2.extras
 import io
 import os
+import csv
 from datetime import datetime
 import qrcode
 import qrcode.image.svg
@@ -91,17 +92,14 @@ try:
     init_db()
     migrate_db()
 except Exception as e:
-    # Don't crash the import; logs will show the error
     print("DB init/migrate error:", e)
 
 # ---------------- ROUTES ---------------- #
 
-# Dashboard
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
 
-# Simple health endpoint for uptime pings
 @app.route('/healthz')
 def healthz():
     return "ok", 200
@@ -179,15 +177,13 @@ def add_operation():
 
     return redirect(url_for('operations'))
 
-# Production: page + add_production handler
+# Production
 @app.route('/production')
 def production():
-    # (You can fill this page later; just render the template for now)
     return render_template('production.html')
 
 @app.route('/add_production', methods=['POST'])
 def add_production():
-    """Create a production log entry."""
     try:
         worker_id = int(request.form.get('worker_id', '0'))
         operation_id = int(request.form.get('operation_id', '0'))
@@ -219,7 +215,34 @@ def add_production():
 def reports():
     return render_template('reports.html')
 
-# ---------------- QR CODE ---------------- #
+@app.route('/download_report')
+def download_report():
+    """Download workers + scan count as CSV."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT w.name, w.department, COUNT(s.id) AS total_scans
+        FROM workers w
+        LEFT JOIN scan_logs s ON s.token_id = w.token_id
+        GROUP BY w.id
+        ORDER BY w.name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    si = io.StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["Name", "Department", "Total Scans"])
+    writer.writerows(rows)
+    si.seek(0)
+
+    return Response(
+        si.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=report.csv"}
+    )
+
+# QR
 @app.route('/qr/<token_id>')
 def qr_code(token_id):
     factory = qrcode.image.svg.SvgImage
@@ -228,7 +251,7 @@ def qr_code(token_id):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# ---------------- SCAN API ---------------- #
+# Scan API
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.get_json(silent=True) or {}
@@ -236,7 +259,6 @@ def scan():
     secret = data.get('secret')
     scan_type = data.get('scan_type', 'work')
 
-    # --- Validation ---
     if not token_id or not secret:
         return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
     if secret != DEVICE_SECRET:
@@ -246,50 +268,28 @@ def scan():
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute('SELECT * FROM workers WHERE token_id = %s', (token_id,))
     worker = cur.fetchone()
-
     if not worker:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
-    # --- Always log scan ---
-    try:
-        cur.execute(
-            'INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)',
-            (token_id, scan_type)
-        )
-    except Exception as e:
-        conn.rollback()
-        conn.close()
-        return jsonify({'status': 'error', 'message': f'scan log failed: {e}'}), 500
+    cur.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
 
     message = ""
     is_logged_in = worker['is_logged_in']
-
     if scan_type == "login":
-        cur.execute(
-            "UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s",
-            (token_id,)
-        )
+        cur.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
         message = "Login successful"
         is_logged_in = True
-
     elif scan_type == "logout":
-        cur.execute(
-            "UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s",
-            (token_id,)
-        )
+        cur.execute("UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s", (token_id,))
         message = "Logout successful"
         is_logged_in = False
-
-    else:  # work scan
+    else:
         message = "Work scan logged"
 
-    # --- Count today’s work scans ---
     cur.execute("""
-        SELECT COUNT(*) 
-        FROM scan_logs 
-        WHERE token_id = %s AND scan_type = 'work'
-          AND DATE(scanned_at) = CURRENT_DATE
+        SELECT COUNT(*) FROM scan_logs
+        WHERE token_id = %s AND scan_type = 'work' AND DATE(scanned_at) = CURRENT_DATE
     """, (token_id,))
     scans_today = cur.fetchone()[0]
 
@@ -298,7 +298,6 @@ def scan():
     conn.commit()
     conn.close()
 
-    # --- Response aligned with ESP32 expectations ---
     return jsonify({
         'status': 'success',
         'message': message,
@@ -309,25 +308,21 @@ def scan():
         'earnings': earnings
     })
 
-# ---------------- DASHBOARD JSON APIs ---------------- #
+# Dashboard JSON
 @app.route('/api/stats')
 def api_stats():
     conn = get_conn()
     cur = conn.cursor()
-    # total workers
     cur.execute("SELECT COUNT(*) FROM workers")
     workers_count = cur.fetchone()[0]
-    # total operations
     cur.execute("SELECT COUNT(*) FROM operations")
     operations_count = cur.fetchone()[0]
-    # today scans (work)
     cur.execute("""
         SELECT COUNT(*) FROM scan_logs
         WHERE scan_type = 'work' AND DATE(scanned_at) = CURRENT_DATE
     """)
     scans_today = cur.fetchone()[0]
     conn.close()
-
     return jsonify({
         "workers": workers_count,
         "operations": operations_count,
@@ -337,11 +332,6 @@ def api_stats():
 
 @app.route('/api/chart-data')
 def api_chart_data():
-    """
-    Return last 7 days of work scans for a simple chart.
-    labels: list of ISO dates
-    values: parallel list of counts
-    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -358,16 +348,12 @@ def api_chart_data():
     """)
     rows = cur.fetchall()
     conn.close()
-
     labels = [r[0].isoformat() for r in rows]
     values = [int(r[1]) for r in rows]
     return jsonify({"labels": labels, "values": values})
 
 @app.route('/api/activities')
 def api_activities():
-    """
-    Return recent scans with worker name.
-    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("""
@@ -379,7 +365,6 @@ def api_activities():
     """)
     rows = cur.fetchall()
     conn.close()
-
     items = []
     for r in rows:
         items.append({
@@ -392,12 +377,9 @@ def api_activities():
         })
     return jsonify(items)
 
-# ---------------- ONE-TIME DB MIGRATION (protected) ---------------- #
+# Admin migration
 @app.route('/admin/migrate')
 def admin_migrate():
-    """
-    Call once: https://your-domain/admin/migrate?secret=DEVICE_SECRET
-    """
     secret = request.args.get("secret")
     if secret != DEVICE_SECRET:
         abort(403)
@@ -407,7 +389,5 @@ def admin_migrate():
     except Exception as e:
         return f"Migration error: {e}", 500
 
-# ---------------- RUN (for local dev) ---------------- #
 if __name__ == "__main__":
-    # In Render, gunicorn runs this; local dev can run: python app.py
     app.run(host="0.0.0.0", port=5000, debug=True)

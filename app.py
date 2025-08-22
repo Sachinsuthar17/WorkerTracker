@@ -1,8 +1,7 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify, make_response, Response
+from flask import Flask, render_template, redirect, url_for, request, jsonify, Response
 from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
-import csv
 import io
 import os
 from datetime import datetime
@@ -12,12 +11,14 @@ import qrcode.image.svg
 app = Flask(__name__)
 CORS(app)
 
+# ---------------- CONFIG ---------------- #
 DB_URL = os.getenv("DATABASE_URL")
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
 
 def get_conn():
     return psycopg2.connect(DB_URL, sslmode="require")
 
+# ---------------- INIT DB ---------------- #
 def init_db():
     conn = get_conn()
     cursor = conn.cursor()
@@ -71,7 +72,6 @@ def init_db():
 init_db()
 
 # ---------------- ROUTES ---------------- #
-
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
@@ -113,14 +113,15 @@ def qr_code(token_id):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# ---- Scans with login/logout ----
+# ---------------- SCAN API ---------------- #
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.get_json()
     token_id = data.get('token_id')
     secret = data.get('secret')
-    scan_type = data.get('scan_type', 'work')  # default: work
+    scan_type = data.get('scan_type', 'work')
 
+    # --- Validation ---
     if not token_id or not secret:
         return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
     if secret != DEVICE_SECRET:
@@ -135,19 +136,24 @@ def scan():
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
-    # Log scan
+    # --- Always log scan ---
     cursor.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
+
+    message = ""
+    is_logged_in = worker['is_logged_in']
 
     if scan_type == "login":
         cursor.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
         message = "Login successful"
+        is_logged_in = True
     elif scan_type == "logout":
         cursor.execute("UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s", (token_id,))
         message = "Logout successful"
-    else:  # work
+        is_logged_in = False
+    else:  # work scan
         message = "Work scan logged"
 
-    # Count today's work scans
+    # --- Count today’s work scans ---
     cursor.execute("""
         SELECT COUNT(*) 
         FROM scan_logs 
@@ -162,12 +168,13 @@ def scan():
     conn.commit()
     conn.close()
 
+    # --- Response aligned with ESP32 expectations ---
     return jsonify({
         'status': 'success',
         'message': message,
         'name': worker['name'],
         'department': worker['department'],
-        'is_logged_in': worker['is_logged_in'],
+        'is_logged_in': is_logged_in,
         'scans_today': scans_today,
         'earnings': earnings
     })

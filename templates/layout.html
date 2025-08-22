@@ -11,7 +11,7 @@
 <body data-color-scheme="dark">
     <div class="dashboard">
         <!-- Mobile Menu Toggle -->
-        <button class="mobile-menu-toggle" id="mobileMenuToggle">
+        <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Toggle menu">
             <i class="fas fa-bars"></i>
         </button>
 
@@ -54,7 +54,6 @@
                         <span>Reports</span>
                     </a>
                 </li>
-                <!-- Settings link removed -->
             </ul>
         </nav>
 
@@ -69,8 +68,8 @@
         const menuToggle = document.getElementById('mobileMenuToggle');
         const sidebar = document.getElementById('sidebar');
 
-        if (menuToggle) {
-            menuToggle.addEventListener('click', function() {
+        if (menuToggle && sidebar) {
+            menuToggle.addEventListener('click', () => {
                 sidebar.classList.toggle('show');
             });
         }
@@ -82,7 +81,7 @@
                 <html>
                 <head><title>Print QR</title></head>
                 <body style="text-align: center; margin-top: 50px;">
-                    <img src="${url}" style="width: 300px;" />
+                    <img src="${url}" alt="QR Code" style="width: 300px;" />
                     <script>
                         window.onload = function() {
                             setTimeout(() => window.print(), 500);
@@ -94,5 +93,7 @@
             printWindow.document.close();
         }
     </script>
+
+    {% block scripts %}{% endblock %}
 </body>
 </html>

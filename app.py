@@ -12,10 +12,7 @@ import qrcode.image.svg
 app = Flask(__name__)
 CORS(app)
 
-# Database connection string (from Render environment)
 DB_URL = os.getenv("DATABASE_URL")
-
-# Device shared secret for ESP32 authentication
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
 
 def get_conn():
@@ -25,7 +22,6 @@ def init_db():
     conn = get_conn()
     cursor = conn.cursor()
 
-    # Workers table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -33,11 +29,13 @@ def init_db():
             department TEXT,
             token_id TEXT UNIQUE,
             status TEXT DEFAULT 'active',
+            is_logged_in BOOLEAN DEFAULT FALSE,
+            last_login TIMESTAMPTZ,
+            last_logout TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Operations table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id SERIAL PRIMARY KEY,
@@ -47,7 +45,6 @@ def init_db():
         )
     """)
 
-    # Production logs table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -59,11 +56,11 @@ def init_db():
         )
     """)
 
-    # Scan logs
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
             id SERIAL PRIMARY KEY,
             token_id TEXT NOT NULL,
+            scan_type TEXT DEFAULT 'work',
             scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -79,12 +76,11 @@ init_db()
 def dashboard():
     return render_template('dashboard.html')
 
-# ---- Workers ----
 @app.route('/workers')
 def workers():
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, department, token_id, status, created_at FROM workers ORDER BY created_at DESC')
+    cursor.execute('SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at FROM workers ORDER BY created_at DESC')
     workers = cursor.fetchall()
     conn.close()
     return render_template('workers.html', workers=workers)
@@ -109,7 +105,6 @@ def add_worker():
 
     return redirect(url_for('workers'))
 
-# ---- Dynamic QR code ----
 @app.route('/qr/<token_id>')
 def qr_code(token_id):
     factory = qrcode.image.svg.SvgImage
@@ -118,182 +113,61 @@ def qr_code(token_id):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# ---- Scans ----
+# ---- Scans with login/logout ----
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.get_json()
     token_id = data.get('token_id')
     secret = data.get('secret')
+    scan_type = data.get('scan_type', 'work')  # default: work
 
     if not token_id or not secret:
-        return jsonify({
-            'status': 'error',
-            'message': 'Missing token_id or secret',
-            'name': '',
-            'department': '',
-            'scans_today': 0,
-            'earnings': 0.0
-        }), 400
-
+        return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
     if secret != DEVICE_SECRET:
-        return jsonify({
-            'status': 'error',
-            'message': 'Unauthorized',
-            'name': '',
-            'department': '',
-            'scans_today': 0,
-            'earnings': 0.0
-        }), 403
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
 
     conn = get_conn()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute('SELECT * FROM workers WHERE token_id = %s', (token_id,))
     worker = cursor.fetchone()
 
-    if worker:
-        # Log the scan
-        cursor.execute('INSERT INTO scan_logs (token_id) VALUES (%s)', (token_id,))
-        conn.commit()
-
-        # Count today's scans
-        cursor.execute("""
-            SELECT COUNT(*) 
-            FROM scan_logs 
-            WHERE token_id = %s 
-              AND DATE(scanned_at) = CURRENT_DATE
-        """, (token_id,))
-        scans_today = cursor.fetchone()[0]
-
-        # Example per piece rate — can be made dynamic later
-        rate_per_piece = 5.0
-        earnings = scans_today * rate_per_piece
-
+    if not worker:
         conn.close()
-        return jsonify({
-            'status': 'success',
-            'message': 'Scan logged',
-            'name': worker['name'],
-            'department': worker['department'],
-            'scans_today': scans_today,
-            'earnings': earnings
-        })
+        return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
-    else:
-        conn.close()
-        return jsonify({
-            'status': 'error',
-            'message': 'Invalid token_id',
-            'name': '',
-            'department': '',
-            'scans_today': 0,
-            'earnings': 0.0
-        }), 404
+    # Log scan
+    cursor.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
 
-# ---- Operations ----
-@app.route('/operations')
-def operations():
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, description, created_at FROM operations ORDER BY created_at DESC')
-    operations = cursor.fetchall()
-    conn.close()
-    return render_template('operations.html', operations=operations)
+    if scan_type == "login":
+        cursor.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
+        message = "Login successful"
+    elif scan_type == "logout":
+        cursor.execute("UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s", (token_id,))
+        message = "Logout successful"
+    else:  # work
+        message = "Work scan logged"
 
-@app.route('/add_operation', methods=['POST'])
-def add_operation():
-    name = request.form['name']
-    description = request.form.get('description', '')
-
-    conn = get_conn()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('INSERT INTO operations (name, description) VALUES (%s, %s)', (name, description))
-        conn.commit()
-    except psycopg2.IntegrityError:
-        conn.rollback()
-    conn.close()
-
-    return redirect(url_for('operations'))
-
-# ---- Production ----
-@app.route('/production')
-def production():
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT id, name FROM workers WHERE status = %s', ('active',))
-    workers = cursor.fetchall()
-
-    cursor.execute('SELECT id, name FROM operations')
-    operations = cursor.fetchall()
-
+    # Count today's work scans
     cursor.execute("""
-        SELECT pl.id, w.name, o.name, pl.quantity, pl.timestamp, pl.status
-        FROM production_logs pl
-        JOIN workers w ON pl.worker_id = w.id
-        JOIN operations o ON pl.operation_id = o.id
-        ORDER BY pl.timestamp DESC
-        LIMIT 50
-    """)
-    logs = cursor.fetchall()
+        SELECT COUNT(*) 
+        FROM scan_logs 
+        WHERE token_id = %s AND scan_type = 'work'
+          AND DATE(scanned_at) = CURRENT_DATE
+    """, (token_id,))
+    scans_today = cursor.fetchone()[0]
 
-    conn.close()
-    return render_template('production.html', workers=workers, operations=operations, logs=logs)
+    rate_per_piece = 5.0
+    earnings = scans_today * rate_per_piece
 
-@app.route('/add_production', methods=['POST'])
-def add_production():
-    worker_id = request.form['worker_id']
-    operation_id = request.form['operation_id']
-    quantity = request.form.get('quantity', 1)
-
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO production_logs (worker_id, operation_id, quantity) VALUES (%s, %s, %s)', 
-                   (worker_id, operation_id, quantity))
     conn.commit()
     conn.close()
 
-    return redirect(url_for('production'))
-
-# ---- Reports ----
-@app.route('/reports')
-def reports():
-    return render_template('reports.html')
-
-@app.route('/download_report')
-def download_report():
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT w.name, w.department, o.name, 
-               pl.quantity, pl.timestamp, pl.status
-        FROM production_logs pl
-        JOIN workers w ON pl.worker_id = w.id
-        JOIN operations o ON pl.operation_id = o.id
-        ORDER BY pl.timestamp DESC
-    """)
-
-    logs = cursor.fetchall()
-    conn.close()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Worker Name', 'Department', 'Operation', 'Quantity', 'Timestamp', 'Status'])
-    writer.writerows(logs)
-
-    response = make_response(output.getvalue())
-    response.headers['Content-Type'] = 'text/csv'
-    response.headers['Content-Disposition'] = f'attachment; filename=production_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-
-    return response
-
-# ---- Health Check ----
-@app.route('/health')
-def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
-
-# ---------------- RUN ---------------- #
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    return jsonify({
+        'status': 'success',
+        'message': message,
+        'name': worker['name'],
+        'department': worker['department'],
+        'is_logged_in': worker['is_logged_in'],
+        'scans_today': scans_today,
+        'earnings': earnings
+    })

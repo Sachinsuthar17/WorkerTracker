@@ -80,7 +80,10 @@ def dashboard():
 def workers():
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at FROM workers ORDER BY created_at DESC')
+    cursor.execute("""
+        SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at
+        FROM workers ORDER BY created_at DESC
+    """)
     workers = cursor.fetchall()
     conn.close()
     return render_template('workers.html', workers=workers)
@@ -94,8 +97,10 @@ def add_worker():
     conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute('INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)',
-                       (name, department, token_id))
+        cursor.execute(
+            'INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)',
+            (name, department, token_id)
+        )
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
@@ -137,19 +142,30 @@ def scan():
         return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
 
     # --- Always log scan ---
-    cursor.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
+    cursor.execute(
+        'INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)',
+        (token_id, scan_type)
+    )
 
     message = ""
     is_logged_in = worker['is_logged_in']
 
     if scan_type == "login":
-        cursor.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
+        cursor.execute(
+            "UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s",
+            (token_id,)
+        )
         message = "Login successful"
         is_logged_in = True
+
     elif scan_type == "logout":
-        cursor.execute("UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s", (token_id,))
+        cursor.execute(
+            "UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s",
+            (token_id,)
+        )
         message = "Logout successful"
         is_logged_in = False
+
     else:  # work scan
         message = "Work scan logged"
 
@@ -162,7 +178,7 @@ def scan():
     """, (token_id,))
     scans_today = cursor.fetchone()[0]
 
-    rate_per_piece = 5.0
+    rate_per_piece = 5.0  # 💰 change as needed
     earnings = scans_today * rate_per_piece
 
     conn.commit()

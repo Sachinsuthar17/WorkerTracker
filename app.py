@@ -18,11 +18,12 @@ DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3
 def get_conn():
     return psycopg2.connect(DB_URL, sslmode="require")
 
-# ---------------- INIT DB ---------------- #
+# ---------------- INIT DB + MIGRATION ---------------- #
 def init_db():
     conn = get_conn()
     cursor = conn.cursor()
 
+    # Workers table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -30,13 +31,16 @@ def init_db():
             department TEXT,
             token_id TEXT UNIQUE,
             status TEXT DEFAULT 'active',
-            is_logged_in BOOLEAN DEFAULT FALSE,
-            last_login TIMESTAMPTZ,
-            last_logout TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
+    # Ensure new columns exist (safe migrations)
+    cursor.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
+    cursor.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
+    cursor.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
+
+    # Operations table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id SERIAL PRIMARY KEY,
@@ -46,6 +50,7 @@ def init_db():
         )
     """)
 
+    # Production logs
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -57,6 +62,7 @@ def init_db():
         )
     """)
 
+    # Scan logs
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
             id SERIAL PRIMARY KEY,

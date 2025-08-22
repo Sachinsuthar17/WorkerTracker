@@ -72,10 +72,13 @@ def init_db():
 init_db()
 
 # ---------------- ROUTES ---------------- #
+
+# Dashboard
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
 
+# Workers
 @app.route('/workers')
 def workers():
     conn = get_conn()
@@ -110,6 +113,51 @@ def add_worker():
 
     return redirect(url_for('workers'))
 
+# Operations
+@app.route('/operations')
+def operations():
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, name, description, created_at
+        FROM operations ORDER BY created_at DESC
+    """)
+    operations = cursor.fetchall()
+    conn.close()
+    return render_template('operations.html', operations=operations)
+
+@app.route('/add_operation', methods=['POST'])
+def add_operation():
+    name = request.form['name']
+    description = request.form['description']
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'INSERT INTO operations (name, description) VALUES (%s, %s)',
+            (name, description)
+        )
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return "Error: Operation already exists", 400
+    finally:
+        conn.close()
+
+    return redirect(url_for('operations'))
+
+# Production (placeholder for now)
+@app.route('/production')
+def production():
+    return render_template('production.html')
+
+# Reports (placeholder for now)
+@app.route('/reports')
+def reports():
+    return render_template('reports.html')
+
+# ---------------- QR CODE ---------------- #
 @app.route('/qr/<token_id>')
 def qr_code(token_id):
     factory = qrcode.image.svg.SvgImage
@@ -194,3 +242,7 @@ def scan():
         'scans_today': scans_today,
         'earnings': earnings
     })
+
+# ---------------- RUN ---------------- #
+if __name__ == "__main__":
+    app.run(debug=True)

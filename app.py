@@ -22,7 +22,6 @@ DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
 def get_conn():
-    # Render Postgres typically requires SSL
     return psycopg2.connect(DB_URL, sslmode="require")
 
 # ---------------- INIT & MIGRATE DB ---------------- #
@@ -30,7 +29,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # workers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -45,7 +43,6 @@ def init_db():
         )
     """)
 
-    # user assigned operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -56,13 +53,23 @@ def init_db():
         )
     """)
 
-    # scans
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
             operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
             scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS production_logs (
+            id SERIAL PRIMARY KEY,
+            worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
+            operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL,
+            status TEXT DEFAULT 'completed',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -75,24 +82,6 @@ def migrate_db():
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
-    # ensure tables
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_operations (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-            operation_name TEXT NOT NULL,
-            barcode_value TEXT UNIQUE NOT NULL,
-            assigned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scans (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-            operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
-            scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
     conn.commit()
     conn.close()
 
@@ -163,9 +152,46 @@ def worker_qr(token_id):
 def operations():
     return render_template('operations.html', operations=[])
 
-@app.route('/production')
+@app.route('/production', methods=['GET', 'POST'])
 def production():
-    return render_template('production.html')
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if request.method == 'POST':
+        worker_id = request.form.get('worker_id')
+        operation_id = request.form.get('operation_id')
+        quantity = request.form.get('quantity')
+
+        if not worker_id or not operation_id or not quantity:
+            conn.close()
+            return "All fields are required", 400
+
+        try:
+            cur.execute("""
+                INSERT INTO production_logs (worker_id, operation_id, quantity)
+                VALUES (%s, %s, %s)
+            """, (worker_id, operation_id, quantity))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return f"Failed to log production: {e}", 500
+
+    cur.execute("SELECT id, name FROM workers ORDER BY name")
+    workers = cur.fetchall()
+    cur.execute("SELECT id, operation_name FROM user_operations ORDER BY operation_name")
+    operations = cur.fetchall()
+    cur.execute("""
+        SELECT pl.id, w.name, uo.operation_name, pl.quantity, pl.created_at, pl.status
+        FROM production_logs pl
+        JOIN workers w ON pl.worker_id = w.id
+        JOIN user_operations uo ON pl.operation_id = uo.id
+        ORDER BY pl.created_at DESC
+        LIMIT 50
+    """)
+    logs = cur.fetchall()
+    conn.close()
+    return render_template('production.html', workers=workers, operations=operations, logs=logs)
 
 @app.route('/reports')
 def reports():
@@ -187,16 +213,13 @@ def reports():
 def assign_operations():
     conn = get_conn()
     cur = conn.cursor()
-
     if request.method == 'POST':
         user_id = request.form.get('user_id')
         operation_name = request.form.get('operation_name')
         if not user_id or not operation_name:
             conn.close()
             return "User and Operation Name required", 400
-
         barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"
-
         try:
             cur.execute("""
                 INSERT INTO user_operations (user_id, operation_name, barcode_value)
@@ -210,7 +233,6 @@ def assign_operations():
 
     cur.execute("SELECT id, name, department FROM workers ORDER BY name")
     workers = cur.fetchall()
-
     cur.execute("""
         SELECT uo.id, w.name, uo.operation_name, uo.barcode_value, uo.assigned_at
         FROM user_operations uo
@@ -218,7 +240,6 @@ def assign_operations():
         ORDER BY uo.assigned_at DESC
     """)
     assigned = cur.fetchall()
-
     conn.close()
     return render_template('assign_operation.html', workers=workers, assigned=assigned)
 
@@ -231,100 +252,87 @@ def operation_qr(barcode_value):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# --- Scan API --- #
-@app.route('/scan_operation', methods=['POST'])
-def scan_operation():
+# --- Login / Scan API --- #
+@app.route('/scan', methods=['POST'])
+def scan_login():
     data = request.get_json(silent=True) or {}
-    barcode_value = data.get('barcode')
+    token_id = data.get('token_id')
     secret = data.get('secret')
-
-    if not barcode_value or not secret:
-        return jsonify({'status': 'error', 'message': 'Missing barcode or secret'}), 400
+    if not token_id or not secret:
+        return jsonify({'status':'error','message':'Missing token or secret'}),400
     if secret != DEVICE_SECRET:
-        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+        return jsonify({'status':'error','message':'Unauthorized'}),403
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    cur.execute("""
-        SELECT uo.id AS op_id, u.id AS user_id, u.name, u.department
-        FROM user_operations uo
-        JOIN workers u ON uo.user_id = u.id
-        WHERE uo.barcode_value = %s
-    """, (barcode_value,))
-    row = cur.fetchone()
-
-    if not row:
+    cur.execute("SELECT id, name, department FROM workers WHERE token_id=%s", (token_id,))
+    worker = cur.fetchone()
+    if not worker:
         conn.close()
-        return jsonify({'status': 'error', 'message': 'Invalid barcode'}), 404
+        return jsonify({'status':'error','message':'Worker not found'}),404
 
-    cur.execute(
-        "INSERT INTO scans (user_id, operation_id) VALUES (%s, %s)",
-        (row['user_id'], row['op_id'])
-    )
-
-    cur.execute("""
-        SELECT COUNT(*) FROM scans
-        WHERE user_id = %s AND DATE(scanned_at) = CURRENT_DATE
-    """, (row['user_id'],))
-    scans_today = cur.fetchone()[0]
-    earnings = scans_today * RATE_PER_PIECE
-
+    # Log user in
+    cur.execute("UPDATE workers SET is_logged_in=TRUE, last_login=CURRENT_TIMESTAMP WHERE id=%s", (worker['id'],))
     conn.commit()
     conn.close()
 
     return jsonify({
-        'status': 'success',
-        'message': f"Scan recorded for {row['name']}",
-        'user': row['name'],
-        'department': row['department'],
-        'scans_today': scans_today,
-        'earnings': earnings
+        'status':'success',
+        'name': worker['name'],
+        'department': worker['department'],
+        'scans_today': 0,
+        'earnings': 0.0
     })
 
-# --- CSV reports --- #
-@app.route('/download_report/<int:user_id>')
-def download_report(user_id):
+# --- Logout API --- #
+@app.route('/logout', methods=['POST'])
+def logout():
+    data = request.get_json(silent=True) or {}
+    token_id = data.get('token_id')
+    secret = data.get('secret')
+    if secret != DEVICE_SECRET:
+        return jsonify({'status':'error','message':'Unauthorized'}),403
+
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute("UPDATE workers SET is_logged_in=FALSE, last_logout=CURRENT_TIMESTAMP WHERE token_id=%s", (token_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'status':'success'})
+
+# --- Operation Scan API --- #
+@app.route('/scan_operation', methods=['POST'])
+def scan_operation():
+    data = request.get_json(silent=True) or {}
+    barcode_value = data.get('barcode')
+    token_id = data.get('token_id')
+    secret = data.get('secret')
+    if not barcode_value or not token_id or not secret:
+        return jsonify({'status':'error','message':'Missing fields'}),400
+    if secret != DEVICE_SECRET:
+        return jsonify({'status':'error','message':'Unauthorized'}),403
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("""
-        SELECT u.name, u.department, COUNT(s.id) AS total_scans
-        FROM workers u
-        LEFT JOIN scans s ON s.user_id = u.id
-        WHERE u.id = %s
-        GROUP BY u.id
-    """, (user_id,))
+        SELECT uo.id AS op_id, u.id AS user_id, u.name, u.department
+        FROM user_operations uo
+        JOIN workers u ON uo.user_id = u.id
+        WHERE uo.barcode_value=%s AND u.token_id=%s
+    """,(barcode_value, token_id))
     row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status':'error','message':'Invalid barcode'}),404
+
+    cur.execute("INSERT INTO scans (user_id, operation_id) VALUES (%s,%s)",(row['user_id'],row['op_id']))
+    cur.execute("SELECT COUNT(*) FROM scans WHERE user_id=%s AND DATE(scanned_at)=CURRENT_DATE",(row['user_id'],))
+    scans_today = cur.fetchone()[0]
+    earnings = scans_today * RATE_PER_PIECE
+    conn.commit()
     conn.close()
 
-    if not row:
-        return "User not found", 404
-
-    si = io.StringIO()
-    writer = csv.writer(si)
-    writer.writerow(["Name", "Department", "Total Scans"])
-    writer.writerow(row)
-    si.seek(0)
-
-    return Response(
-        si.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment;filename=report_user_{user_id}.csv"}
-    )
-
-# --- Admin migration --- #
-@app.route('/admin/migrate')
-def admin_migrate():
-    secret = request.args.get("secret")
-    if secret != DEVICE_SECRET:
-        abort(403)
-    try:
-        migrate_db()
-        return "Migration complete ✅", 200
-    except Exception as e:
-        return f"Migration error: {e}", 500
-
-# ---------------- MAIN ---------------- #
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    return jsonify({
+        'status':'success',
+        'name': row['name'],
+        'department

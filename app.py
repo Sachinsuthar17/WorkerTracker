@@ -22,6 +22,7 @@ DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
 def get_conn():
+    # Render Postgres typically requires SSL
     return psycopg2.connect(DB_URL, sslmode="require")
 
 # ---------------- INIT & MIGRATE DB ---------------- #
@@ -44,7 +45,7 @@ def init_db():
         )
     """)
 
-    # user operations
+    # per-user assigned operations (barcode per user+operation)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -55,7 +56,7 @@ def init_db():
         )
     """)
 
-    # scans
+    # scans of those barcodes
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id SERIAL PRIMARY KEY,
@@ -74,7 +75,7 @@ def migrate_db():
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
-    # make sure user_operations + scans exist
+    # ensure tables exist (idempotent)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -95,6 +96,7 @@ def migrate_db():
     conn.commit()
     conn.close()
 
+# Initialize + attempt migration on import
 try:
     init_db()
     migrate_db()
@@ -103,15 +105,24 @@ except Exception as e:
 
 # ---------------- ROUTES ---------------- #
 
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
 
+# --- Workers --- #
 @app.route('/workers')
 def workers():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at FROM workers ORDER BY created_at DESC")
+    cur.execute("""
+        SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at
+        FROM workers
+        ORDER BY created_at DESC
+    """)
     rows = cur.fetchall()
     conn.close()
     return render_template('workers.html', workers=rows)
@@ -127,7 +138,10 @@ def add_worker():
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)", (name, department, token_id))
+        cur.execute(
+            "INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)",
+            (name, department, token_id)
+        )
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
@@ -136,7 +150,36 @@ def add_worker():
         conn.close()
     return redirect(url_for('workers'))
 
-# ---------------- USER OPERATIONS ---------------- #
+# --- Simple pages to satisfy sidebar links --- #
+@app.route('/operations')
+def operations():
+    # Your existing operations.html expects `operations`.
+    # Since we aren't using a separate 'operations' table now,
+    # pass an empty list to keep the template happy.
+    # (You can later populate this if you add a global operations table.)
+    return render_template('operations.html', operations=[])
+
+@app.route('/production')
+def production():
+    return render_template('production.html')
+
+@app.route('/reports')
+def reports():
+    # Aggregate per worker for the reports page you already have
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT w.name, w.department, COUNT(s.id) as total_scans
+        FROM workers w
+        LEFT JOIN scans s ON s.user_id = w.id
+        GROUP BY w.id
+        ORDER BY w.name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return render_template('reports.html', reports=rows)
+
+# --- Assign operations (create per-user barcodes) --- #
 @app.route('/assign_operations', methods=['GET', 'POST'])
 def assign_operations():
     conn = get_conn()
@@ -149,6 +192,7 @@ def assign_operations():
             conn.close()
             return "User and Operation Name required", 400
 
+        # unique barcode value (user-operation-timestamp)
         barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"
 
         try:
@@ -162,6 +206,7 @@ def assign_operations():
             conn.close()
             return f"Failed: {e}", 500
 
+    # page data
     cur.execute("SELECT id, name, department FROM workers ORDER BY name")
     workers = cur.fetchall()
 
@@ -176,6 +221,7 @@ def assign_operations():
     conn.close()
     return render_template('assign_operation.html', workers=workers, assigned=assigned)
 
+# --- QR for operation barcode --- #
 @app.route('/qr/operation/<barcode_value>')
 def operation_qr(barcode_value):
     factory = qrcode.image.svg.SvgImage
@@ -184,7 +230,7 @@ def operation_qr(barcode_value):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# ---------------- SCAN API ---------------- #
+# --- Scan API (device calls this) --- #
 @app.route('/scan_operation', methods=['POST'])
 def scan_operation():
     data = request.get_json(silent=True) or {}
@@ -198,15 +244,28 @@ def scan_operation():
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT uo.id as op_id, u.id as user_id, u.name, u.department FROM user_operations uo JOIN workers u ON uo.user_id = u.id WHERE uo.barcode_value = %s", (barcode_value,))
+
+    cur.execute("""
+        SELECT uo.id AS op_id, u.id AS user_id, u.name, u.department
+        FROM user_operations uo
+        JOIN workers u ON uo.user_id = u.id
+        WHERE uo.barcode_value = %s
+    """, (barcode_value,))
     row = cur.fetchone()
+
     if not row:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invalid barcode'}), 404
 
-    cur.execute("INSERT INTO scans (user_id, operation_id) VALUES (%s, %s)", (row['user_id'], row['op_id']))
+    cur.execute(
+        "INSERT INTO scans (user_id, operation_id) VALUES (%s, %s)",
+        (row['user_id'], row['op_id'])
+    )
 
-    cur.execute("SELECT COUNT(*) FROM scans WHERE user_id = %s AND DATE(scanned_at) = CURRENT_DATE", (row['user_id'],))
+    cur.execute("""
+        SELECT COUNT(*) FROM scans
+        WHERE user_id = %s AND DATE(scanned_at) = CURRENT_DATE
+    """, (row['user_id'],))
     scans_today = cur.fetchone()[0]
     earnings = scans_today * RATE_PER_PIECE
 
@@ -222,13 +281,13 @@ def scan_operation():
         'earnings': earnings
     })
 
-# ---------------- REPORTS ---------------- #
+# --- CSV reports --- #
 @app.route('/download_report/<int:user_id>')
 def download_report(user_id):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT u.name, u.department, COUNT(s.id) as total_scans
+        SELECT u.name, u.department, COUNT(s.id) AS total_scans
         FROM workers u
         LEFT JOIN scans s ON s.user_id = u.id
         WHERE u.id = %s
@@ -252,22 +311,7 @@ def download_report(user_id):
         headers={"Content-Disposition": f"attachment;filename=report_user_{user_id}.csv"}
     )
 
-@app.route('/reports')
-def reports():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT w.name, w.department, COUNT(s.id) as total_scans
-        FROM workers w
-        LEFT JOIN scans s ON s.user_id = w.id
-        GROUP BY w.id
-        ORDER BY w.name
-    """)
-    rows = cur.fetchall()
-    conn.close()
-    return render_template('reports.html', reports=rows)
-
-# ---------------- ADMIN ---------------- #
+# --- Admin migration --- #
 @app.route('/admin/migrate')
 def admin_migrate():
     secret = request.args.get("secret")
@@ -279,5 +323,7 @@ def admin_migrate():
     except Exception as e:
         return f"Migration error: {e}", 500
 
+# ---------------- MAIN ---------------- #
 if __name__ == "__main__":
+    # On Render, the port is usually provided via PORT env, but your Procfile likely handles it.
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -150,13 +150,10 @@ def add_worker():
         conn.close()
     return redirect(url_for('workers'))
 
-# --- Simple pages to satisfy sidebar links --- #
+# --- Sidebar page placeholders --- #
 @app.route('/operations')
 def operations():
-    # Your existing operations.html expects `operations`.
-    # Since we aren't using a separate 'operations' table now,
-    # pass an empty list to keep the template happy.
-    # (You can later populate this if you add a global operations table.)
+    # operations.html exists in your templates
     return render_template('operations.html', operations=[])
 
 @app.route('/production')
@@ -165,7 +162,6 @@ def production():
 
 @app.route('/reports')
 def reports():
-    # Aggregate per worker for the reports page you already have
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -325,5 +321,5 @@ def admin_migrate():
 
 # ---------------- MAIN ---------------- #
 if __name__ == "__main__":
-    # On Render, the port is usually provided via PORT env, but your Procfile likely handles it.
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)

@@ -22,7 +22,6 @@ DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
 def get_conn():
-    # Render Postgres typically requires SSL
     return psycopg2.connect(DB_URL, sslmode="require")
 
 # ---------------- INIT & MIGRATE DB ---------------- #
@@ -45,7 +44,7 @@ def init_db():
         )
     """)
 
-    # per-user assigned operations (barcode per user+operation)
+    # user assigned operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -56,7 +55,7 @@ def init_db():
         )
     """)
 
-    # scans of those barcodes
+    # scans
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id SERIAL PRIMARY KEY,
@@ -75,7 +74,7 @@ def migrate_db():
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
-    # ensure tables exist (idempotent)
+    # ensure tables
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -96,7 +95,6 @@ def migrate_db():
     conn.commit()
     conn.close()
 
-# Initialize + attempt migration on import
 try:
     init_db()
     migrate_db()
@@ -150,10 +148,18 @@ def add_worker():
         conn.close()
     return redirect(url_for('workers'))
 
-# --- Sidebar page placeholders --- #
+# --- Worker QR (NEW) --- #
+@app.route('/qr/worker/<token_id>')
+def worker_qr(token_id):
+    factory = qrcode.image.svg.SvgImage
+    img = qrcode.make(token_id, image_factory=factory)
+    stream = io.BytesIO()
+    img.save(stream)
+    return Response(stream.getvalue(), mimetype='image/svg+xml')
+
+# --- Sidebar pages --- #
 @app.route('/operations')
 def operations():
-    # operations.html exists in your templates
     return render_template('operations.html', operations=[])
 
 @app.route('/production')
@@ -175,7 +181,7 @@ def reports():
     conn.close()
     return render_template('reports.html', reports=rows)
 
-# --- Assign operations (create per-user barcodes) --- #
+# --- Assign operations --- #
 @app.route('/assign_operations', methods=['GET', 'POST'])
 def assign_operations():
     conn = get_conn()
@@ -188,7 +194,6 @@ def assign_operations():
             conn.close()
             return "User and Operation Name required", 400
 
-        # unique barcode value (user-operation-timestamp)
         barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"
 
         try:
@@ -202,7 +207,6 @@ def assign_operations():
             conn.close()
             return f"Failed: {e}", 500
 
-    # page data
     cur.execute("SELECT id, name, department FROM workers ORDER BY name")
     workers = cur.fetchall()
 
@@ -226,7 +230,7 @@ def operation_qr(barcode_value):
     img.save(stream)
     return Response(stream.getvalue(), mimetype='image/svg+xml')
 
-# --- Scan API (device calls this) --- #
+# --- Scan API --- #
 @app.route('/scan_operation', methods=['POST'])
 def scan_operation():
     data = request.get_json(silent=True) or {}

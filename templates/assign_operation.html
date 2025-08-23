@@ -1,0 +1,71 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header class="page-header">
+  <h1>Assign Operation</h1>
+  <p>Assign a unique operation to a worker and generate a barcode</p>
+</header>
+
+<!-- Assign Operation Form -->
+<section class="form-section">
+  <div class="form-card">
+    <h3>Assign New Operation</h3>
+    <form method="POST" action="{{ url_for('assign_operation') }}" class="form-grid">
+      <div class="form-group">
+        <label for="user_id">Select Worker</label>
+        <select id="user_id" name="user_id" required>
+          <option value="">-- Choose Worker --</option>
+          {% for worker in workers %}
+          <option value="{{ worker[0] }}">{{ worker[1] }} ({{ worker[2] or 'No Dept' }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="operation_name">Operation Name</label>
+        <input type="text" id="operation_name" name="operation_name" placeholder="Enter operation name" required>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">
+          <i class="fas fa-plus"></i> Assign Operation
+        </button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<!-- Assigned Operations List -->
+<section class="table-section">
+  <div class="table-card">
+    <div class="table-header">
+      <h3>Assigned Operations</h3>
+      <span class="table-count">{{ assigned|length }} operations</span>
+    </div>
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Worker</th>
+            <th>Operation</th>
+            <th>Barcode</th>
+            <th>Assigned At</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for op in assigned %}
+          <tr>
+            <td>{{ op[0] }}</td>
+            <td>{{ op[1] }}</td>
+            <td>{{ op[2] }}</td>
+            <td>
+              <a href="{{ url_for('operation_qr', barcode_value=op[3]) }}" target="_blank">View QR</a>
+            </td>
+            <td>{{ op[4] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

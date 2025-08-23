@@ -44,7 +44,7 @@ def init_db():
         )
     """)
 
-    # operations assigned to users
+    # user operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -74,6 +74,24 @@ def migrate_db():
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
+    # make sure user_operations + scans exist
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_operations (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
+            operation_name TEXT NOT NULL,
+            barcode_value TEXT UNIQUE NOT NULL,
+            assigned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scans (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
+            operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
+            scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -119,30 +137,44 @@ def add_worker():
     return redirect(url_for('workers'))
 
 # ---------------- USER OPERATIONS ---------------- #
-@app.route('/assign_operation', methods=['POST'])
-def assign_operation():
-    user_id = request.form.get('user_id')
-    operation_name = request.form.get('operation_name')
-    if not user_id or not operation_name:
-        return "User and Operation Name required", 400
-
-    barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"  # unique
-
+@app.route('/assign_operations', methods=['GET', 'POST'])
+def assign_operations():
     conn = get_conn()
     cur = conn.cursor()
-    try:
-        cur.execute("""
-            INSERT INTO user_operations (user_id, operation_name, barcode_value)
-            VALUES (%s, %s, %s)
-        """, (user_id, operation_name, barcode_value))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        return f"Failed: {e}", 500
-    finally:
-        conn.close()
 
-    return redirect(url_for('workers'))
+    if request.method == 'POST':
+        user_id = request.form.get('user_id')
+        operation_name = request.form.get('operation_name')
+        if not user_id or not operation_name:
+            conn.close()
+            return "User and Operation Name required", 400
+
+        barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"
+
+        try:
+            cur.execute("""
+                INSERT INTO user_operations (user_id, operation_name, barcode_value)
+                VALUES (%s, %s, %s)
+            """, (user_id, operation_name, barcode_value))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return f"Failed: {e}", 500
+
+    cur.execute("SELECT id, name, department FROM workers ORDER BY name")
+    workers = cur.fetchall()
+
+    cur.execute("""
+        SELECT uo.id, w.name, uo.operation_name, uo.barcode_value, uo.assigned_at
+        FROM user_operations uo
+        JOIN workers w ON uo.user_id = w.id
+        ORDER BY uo.assigned_at DESC
+    """)
+    assigned = cur.fetchall()
+
+    conn.close()
+    return render_template('assign_operation.html', workers=workers, assigned=assigned)
 
 @app.route('/qr/operation/<barcode_value>')
 def operation_qr(barcode_value):
@@ -219,6 +251,21 @@ def download_report(user_id):
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment;filename=report_user_{user_id}.csv"}
     )
+
+@app.route('/reports')
+def reports():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT w.name, w.department, COUNT(s.id) as total_scans
+        FROM workers w
+        LEFT JOIN scans s ON s.user_id = w.id
+        GROUP BY w.id
+        ORDER BY w.name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return render_template('reports.html', reports=rows)
 
 # ---------------- ADMIN ---------------- #
 @app.route('/admin/migrate')

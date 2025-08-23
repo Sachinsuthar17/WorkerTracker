@@ -335,4 +335,11 @@ def scan_operation():
     return jsonify({
         'status':'success',
         'name': row['name'],
-        'department
+        'department': row['department'],
+        'scans_today': scans_today,
+        'earnings': earnings
+    })
+
+# ---------------- RUN ---------------- #
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

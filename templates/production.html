@@ -10,7 +10,8 @@
 <section class="form-section">
     <div class="form-card">
         <h3>Log Production Entry</h3>
-        <form method="POST" action="{{ url_for('add_production') }}" class="form-grid">
+        <!-- FIXED: endpoint changed from add_production → production -->
+        <form method="POST" action="{{ url_for('production') }}" class="form-grid">
             <div class="form-group">
                 <label for="worker_id">Select Worker</label>
                 <select id="worker_id" name="worker_id" required>

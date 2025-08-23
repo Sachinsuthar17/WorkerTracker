@@ -77,23 +77,23 @@
                                 {{ worker[4] }}
                             </span>
                         </td>
-                        <td>{{ worker[5] }}</td>
+                        <td>{{ worker[8] }}</td> <!-- created_at (index 8 from SELECT) -->
                         <td>
                             {% if worker[3] %}
                             <div class="qr-actions">
                                 <!-- Dynamic QR from Flask route -->
-                                <img src="{{ url_for('qr_code', token_id=worker[3]) }}"
+                                <img src="{{ url_for('worker_qr', token_id=worker[3]) }}"
                                      alt="QR Code"
                                      width="60"
-                                     onclick="openPrintWindow('{{ url_for('qr_code', token_id=worker[3]) }}')"
+                                     onclick="openPrintWindow('{{ url_for('worker_qr', token_id=worker[3]) }}')"
                                      style="cursor:pointer; border:1px solid #ddd; border-radius:4px;">
 
                                 <div class="qr-buttons" style="margin-top: 5px;">
-                                    <a href="{{ url_for('qr_code', token_id=worker[3]) }}"
+                                    <a href="{{ url_for('worker_qr', token_id=worker[3]) }}"
                                        download="{{ worker[3] }}.svg"
                                        class="btn btn-sm">Download</a>
                                     <button type="button" class="btn btn-sm"
-                                            onclick="openPrintWindow('{{ url_for('qr_code', token_id=worker[3]) }}')">
+                                            onclick="openPrintWindow('{{ url_for('worker_qr', token_id=worker[3]) }}')">
                                         Print
                                     </button>
                                 </div>

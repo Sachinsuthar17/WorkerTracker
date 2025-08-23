@@ -22,6 +22,7 @@ DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
 def get_conn():
+    # Render Postgres typically requires SSL
     return psycopg2.connect(DB_URL, sslmode="require")
 
 # ---------------- INIT & MIGRATE DB ---------------- #
@@ -141,14 +142,14 @@ def add_worker():
             (name, department, token_id)
         )
         conn.commit()
-    except psycopg2.IntegrityError:
+    except Exception as e:
         conn.rollback()
-        return "Token ID must be unique", 400
+        return f"Error: {e}", 400
     finally:
         conn.close()
     return redirect(url_for('workers'))
 
-# --- Worker QR (NEW) --- #
+# --- Worker QR --- #
 @app.route('/qr/worker/<token_id>')
 def worker_qr(token_id):
     factory = qrcode.image.svg.SvgImage

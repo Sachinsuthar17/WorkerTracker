@@ -1,355 +1,334 @@
 import os
-from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+import math
+from datetime import datetime, timezone, date
+from contextlib import contextmanager
 
-from flask import Flask, jsonify, render_template, request, redirect, url_for
+from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 import psycopg2
-from psycopg2.extras import RealDictCursor, RealDictRow
+from psycopg2.pool import SimpleConnectionPool
 
-# -----------------------------------------------------------------------------
-# Config
-# -----------------------------------------------------------------------------
-PORT = int(os.environ.get("PORT", "10000"))
-DATABASE_URL = os.environ.get("DATABASE_URL")  # e.g. render PostgreSQL URL
-DEVICE_SECRET = os.environ.get("DEVICE_SECRET", "changeme")
-RATE_PER_PIECE = float(os.environ.get("RATE_PER_PIECE", "5.0"))
+# -------------------- Config --------------------
+APP_TITLE = "ESP32 Scanner Dashboard"
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # e.g. from Render PostgreSQL add-on
+DEVICE_SECRET = os.getenv(
+    "DEVICE_SECRET",
+    "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F"  # <- keep in sync with ESP32
+)
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var is required")
 
 app = Flask(__name__)
 CORS(app)
 
-# -----------------------------------------------------------------------------
-# DB helpers
-# -----------------------------------------------------------------------------
-def _db():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL not configured")
-    # Render gives postgres://; psycopg prefers postgresql://
-    dburl = DATABASE_URL.replace("postgres://", "postgresql://")
-    return psycopg2.connect(dburl)
+# Gunicorn on Render will import app:app from this file.
 
-def _rate_sql():
-    """
-    Returns the SQL expression that calculates the amount earned for a scan.
-    We pay priority to an operation-specific rate if available, falling back to env rate.
-    """
-    # ops.rate_per_piece is optional; COALESCE to env default
-    return f"COALESCE(ops.rate_per_piece, {RATE_PER_PIECE})"
+# ---------------- Connection Pool ---------------
+pool: SimpleConnectionPool | None = None
+inited = False  # guarded initialisation since Flask 3 removed before_first_request
 
-# -----------------------------------------------------------------------------
-# Bootstrap (create minimal schema if missing)
-# -----------------------------------------------------------------------------
-BOOTSTRAP_SQL = """
-CREATE TABLE IF NOT EXISTS workers (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    department TEXT
-);
+def make_pool():
+    global pool
+    if pool is None:
+        pool = SimpleConnectionPool(
+            1, 10, dsn=DATABASE_URL, sslmode="require"
+        )
 
-CREATE TABLE IF NOT EXISTS operations (
-    id SERIAL PRIMARY KEY,
-    code TEXT UNIQUE NOT NULL,
-    description TEXT,
-    rate_per_piece NUMERIC
-);
-
-CREATE TABLE IF NOT EXISTS worker_operations (
-    id SERIAL PRIMARY KEY,
-    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-    operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS scans (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-    operation_id INTEGER REFERENCES operations(id),
-    barcode TEXT,
-    scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Helpful indexes
-CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans(scanned_at DESC);
-CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans(user_id);
-CREATE INDEX IF NOT EXISTS idx_scans_operation_id ON scans(operation_id);
-"""
-
-@app.before_first_request
-def bootstrap():
+@contextmanager
+def db() -> psycopg2.extensions.connection:
+    if pool is None:
+        make_pool()
+    conn = pool.getconn()
     try:
-        with _db() as conn, conn.cursor() as cur:
-            cur.execute(BOOTSTRAP_SQL)
-    except Exception as e:
-        app.logger.error("Bootstrap failed: %s", e)
+        yield conn
+    finally:
+        pool.putconn(conn)
 
-# -----------------------------------------------------------------------------
-# Pages
-# -----------------------------------------------------------------------------
+def ensure_schema(conn):
+    with conn.cursor() as cur:
+        # workers table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS workers (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                department TEXT
+            );
+        """)
+        # scans table (no bundle_id!)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scans (
+                id SERIAL PRIMARY KEY,
+                worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                operation_code TEXT,
+                barcode TEXT,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                rate NUMERIC(10,2) NOT NULL DEFAULT 0.00
+            );
+        """)
+        # simple helper index for today queries
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_worker_id_created ON scans (worker_id, created_at DESC);")
+    conn.commit()
+
+def init_once():
+    global inited
+    if inited:
+        return
+    make_pool()
+    with db() as conn:
+        ensure_schema(conn)
+    inited = True
+
+@app.before_request
+def _guard_init():
+    # initialize only once and only when the process starts serving
+    init_once()
+
+# ---------------- Helper functions --------------
+def today_bounds_utc():
+    # today in UTC (works fine for server-side stats)
+    today = date.today()
+    start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    end = datetime(today.year, today.month, today.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return start, end
+
+def upsert_worker(conn, name: str):
+    name = name.strip()
+    if not name:
+        raise ValueError("empty worker name")
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, name, COALESCE(department,'') FROM workers WHERE LOWER(name)=LOWER(%s)", (name,))
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1], row[2]
+        cur.execute("INSERT INTO workers(name) VALUES (%s) RETURNING id, name", (name,))
+        row = cur.fetchone()
+    conn.commit()
+    return row[0], row[1], ""
+
+def insert_scan(conn, worker_id: int, operation_code: str | None, barcode: str | None):
+    # Simple business logic: each scan = 1 piece; rate determined by operation prefix if present
+    qty = 1
+    rate = 0.00
+    if operation_code:
+        # Example rule: OP<number> => rate by number*0.5 (you can adjust)
+        # Plain, predictable, and safe if you don't have a rates table yet.
+        try:
+            num = int(''.join([c for c in operation_code if c.isdigit()]) or "0")
+            rate = max(0, min(9999, num * 0.5))
+        except Exception:
+            rate = 0.00
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO scans (worker_id, operation_code, barcode, quantity, rate)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, (worker_id, operation_code, barcode, qty, rate))
+        _ = cur.fetchone()
+    conn.commit()
+
+def summarize_today(conn, worker_id: int | None = None):
+    start, end = today_bounds_utc()
+    with conn.cursor() as cur:
+        if worker_id:
+            cur.execute("""
+                SELECT COALESCE(SUM(quantity),0) AS pieces,
+                       COALESCE(SUM(quantity*rate),0) AS earn
+                FROM scans
+                WHERE created_at BETWEEN %s AND %s
+                  AND worker_id = %s
+            """, (start, end, worker_id))
+        else:
+            cur.execute("""
+                SELECT COALESCE(SUM(quantity),0) AS pieces,
+                       COALESCE(SUM(quantity*rate),0) AS earn
+                FROM scans
+                WHERE created_at BETWEEN %s AND %s
+            """, (start, end))
+        row = cur.fetchone()
+        pieces = int(row[0] or 0)
+        earn = float(row[1] or 0.0)
+    return pieces, earn
+
+# ----------------- Routes (UI) -------------------
 @app.route("/")
 def dashboard():
-    return render_template("dashboard.html")
-
-@app.route("/production")
-def production():  # keep endpoint name 'production' for layout links
-    return redirect(url_for("dashboard"))
+    # Your dashboard.html should call /api/stats and /api/activities via fetch()
+    return render_template("dashboard.html", app_title=APP_TITLE)
 
 @app.route("/workers")
-def workers():
-    # list workers
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT id, name, department FROM workers ORDER BY name;")
-        rows = cur.fetchall()
-    return render_template("workers.html", workers=rows)
+def workers_page():
+    return render_template("workers.html", app_title=APP_TITLE)
 
 @app.route("/operations")
 def operations_page():
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT id, code, description, rate_per_piece FROM operations ORDER BY code;")
-        ops = cur.fetchall()
-    return render_template("operations.html", operations=ops)
-
-@app.route("/assign")
-def assign_operations():  # keep name 'assign_operations' for layout links
-    # fetch workers + operations for the form
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT id, name FROM workers ORDER BY name;")
-        workers = cur.fetchall()
-        cur.execute("SELECT id, code FROM operations ORDER BY code;")
-        ops = cur.fetchall()
-        cur.execute("""
-            SELECT wo.id, w.name AS worker, o.code AS operation
-            FROM worker_operations wo
-            JOIN workers w ON w.id = wo.worker_id
-            JOIN operations o ON o.id = wo.operation_id
-            ORDER BY w.name, o.code;
-        """)
-        assigned = cur.fetchall()
-    return render_template("assign_operation.html", workers=workers, operations=ops, assignments=assigned)
+    return render_template("operations.html", app_title=APP_TITLE)
 
 @app.route("/reports")
-def reports():
-    return render_template("reports.html")
+def reports_page():
+    return render_template("reports.html", app_title=APP_TITLE)
 
 @app.route("/settings")
-def settings():
-    return render_template("settings.html", rate_per_piece=RATE_PER_PIECE, device_secret_set=bool(DEVICE_SECRET))
+def settings_page():
+    return render_template("settings.html", app_title=APP_TITLE)
 
-# -----------------------------------------------------------------------------
-# JSON/AJAX endpoints for forms
-# -----------------------------------------------------------------------------
-@app.post("/workers/add")
-def add_worker():
-    data = request.form or request.json or {}
-    name = (data.get("name") or "").strip()
-    dept = (data.get("department") or "").strip() or None
-    if not name:
-        return jsonify({"ok": False, "error": "name is required"}), 400
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("INSERT INTO workers(name, department) VALUES(%s,%s) RETURNING id;", (name, dept))
-        wid = cur.fetchone()["id"]
-    return jsonify({"ok": True, "id": wid})
+@app.route("/assign_operation")
+def assign_operation_page():
+    return render_template("assign_operation.html", app_title=APP_TITLE)
 
-@app.post("/operations/add")
-def add_operation():
-    data = request.form or request.json or {}
-    code = (data.get("code") or "").strip()
-    desc = (data.get("description") or "").strip() or None
-    rate = data.get("rate_per_piece")
-    rate_val = float(rate) if rate not in (None, "",) else None
-    if not code:
-        return jsonify({"ok": False, "error": "code is required"}), 400
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            "INSERT INTO operations(code, description, rate_per_piece) VALUES(%s,%s,%s) RETURNING id;",
-            (code, desc, rate_val)
-        )
-        oid = cur.fetchone()["id"]
-    return jsonify({"ok": True, "id": oid})
-
-@app.post("/assign/save")
-def assign_operation_json():
-    data = request.form or request.json or {}
-    worker_id = data.get("worker_id")
-    operation_id = data.get("operation_id")
-    if not worker_id or not operation_id:
-        return jsonify({"ok": False, "error": "worker_id and operation_id are required"}), 400
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        # avoid duplicates
-        cur.execute("""
-            SELECT 1 FROM worker_operations
-            WHERE worker_id=%s AND operation_id=%s
-        """, (worker_id, operation_id))
-        if not cur.fetchone():
-            cur.execute("""
-                INSERT INTO worker_operations(worker_id, operation_id) VALUES(%s,%s);
-            """, (worker_id, operation_id))
-    return jsonify({"ok": True})
-
-@app.post("/assign/delete")
-def delete_assignment():
-    data = request.form or request.json or {}
-    aid = data.get("assignment_id")
-    if not aid:
-        return jsonify({"ok": False, "error": "assignment_id is required"}), 400
-    with _db() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM worker_operations WHERE id=%s;", (aid,))
-    return jsonify({"ok": True})
-
-# -----------------------------------------------------------------------------
-# Dashboard APIs
-# -----------------------------------------------------------------------------
-@app.get("/api/stats")
+# --------------- Routes (API) --------------------
+@app.route("/api/stats")
 def api_stats():
-    """Return quick totals for 'today' in server UTC."""
-    now = datetime.now(timezone.utc)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(f"""
-            SELECT 
-                COUNT(s.id) AS pieces,
-                COALESCE(SUM({_rate_sql()}), 0) AS amount
-            FROM scans s
-            LEFT JOIN operations ops ON ops.id = s.operation_id
-            WHERE s.scanned_at >= %s AND s.scanned_at < %s;
-        """, (start, end))
-        row: RealDictRow = cur.fetchone()
-    return jsonify({
-        "pieces": int(row["pieces"] or 0),
-        "amount": float(row["amount"] or 0.0)
-    })
+    with db() as conn:
+        total_pieces, total_earn = summarize_today(conn, None)
+        # active workers today
+        start, end = today_bounds_utc()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(DISTINCT worker_id)
+                FROM scans
+                WHERE created_at BETWEEN %s AND %s
+            """, (start, end))
+            active_workers = cur.fetchone()[0] or 0
 
-@app.get("/api/activities")
+            cur.execute("""
+                SELECT COUNT(DISTINCT COALESCE(operation_code, ''))
+                FROM scans
+                WHERE created_at BETWEEN %s AND %s
+            """, (start, end))
+            distinct_ops = cur.fetchone()[0] or 0
+
+        return jsonify({
+            "pieces_today": total_pieces,
+            "earn_today": round(total_earn, 2),
+            "active_workers": active_workers,
+            "operations_today": distinct_ops
+        })
+
+@app.route("/api/activities")
 def api_activities():
     """
-    Latest 100 scan events with worker name, department (line), operation code, and amount.
-    IMPORTANT: Does NOT assume 'bundle_id' exists; no join to bundles.
+    Recent activity stream for the dashboard.
+    No bundle_id, no bundles join. Only workers + scans.
+    Optional filters: ?worker=<name>&q=<text>&limit=100
     """
-    limit = int(request.args.get("limit", 100))
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(200, int(request.args.get("limit", 100))))
+    worker_name = request.args.get("worker", "").strip()
+    q = request.args.get("q", "").strip()
 
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(f"""
-            SELECT
-                s.scanned_at AS ts,
-                w.name AS worker,
-                w.department AS line,
-                ops.code AS operation,
-                {_rate_sql()} AS amount,
-                s.barcode AS barcode
-            FROM scans s
-            LEFT JOIN workers w ON w.id = s.user_id
-            LEFT JOIN operations ops ON ops.id = s.operation_id
-            ORDER BY s.scanned_at DESC
-            LIMIT %s;
-        """, (limit,))
+    params = []
+    wheres = []
+    sql = """
+        SELECT
+            s.created_at AS ts,
+            w.name AS worker,
+            COALESCE(s.operation_code, '') AS op,
+            COALESCE(s.barcode, '') AS barcode,
+            s.quantity,
+            s.rate,
+            (s.quantity * s.rate) AS amount
+        FROM scans s
+        JOIN workers w ON w.id = s.worker_id
+    """
+
+    if worker_name:
+        wheres.append("LOWER(w.name) = LOWER(%s)")
+        params.append(worker_name)
+
+    if q:
+        # search in op/barcode
+        wheres.append("(LOWER(COALESCE(s.operation_code,'')) LIKE LOWER(%s) OR LOWER(COALESCE(s.barcode,'')) LIKE LOWER(%s))")
+        params.extend([f"%{q}%", f"%{q}%"])
+
+    if wheres:
+        sql += " WHERE " + " AND ".join(wheres)
+
+    sql += " ORDER BY s.created_at DESC LIMIT %s"
+    params.append(limit)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
         rows = cur.fetchall()
+        activities = []
+        for r in rows:
+            ts, worker, op, barcode, qty, rate, amount = r
+            activities.append({
+                "timestamp": ts.isoformat(),
+                "worker": worker,
+                "operation": op,
+                "barcode": barcode,
+                "qty": qty,
+                "rate": float(rate),
+                "amount": float(amount)
+            })
+    return jsonify({"items": activities})
 
-    out = []
-    for r in rows:
-        out.append({
-            "ts": r["ts"].isoformat() if r["ts"] else None,
-            "worker": r["worker"],
-            "line": r["line"],
-            "operation": r["operation"],
-            "amount": float(r["amount"] or 0.0),
-            "barcode": r.get("barcode"),
+@app.route("/scan", methods=["POST"])
+def scan():
+    """
+    Single unified endpoint for the ESP32.
+
+    Input JSON:
+      {
+        "secret": "...",
+        "worker_name": "Alice",
+        "operation_code": "OP10",   # optional
+        "barcode": "123456",        # optional
+      }
+    Output JSON:
+      {
+        "ok": true,
+        "today_pieces": 12,
+        "today_earn": 60.0
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    secret = str(data.get("secret", "")).strip()
+    if not secret or secret != DEVICE_SECRET:
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
+
+    worker_name = str(data.get("worker_name", "")).strip()
+    if not worker_name:
+        return jsonify({"ok": False, "error": "worker_name is required"}), 400
+
+    op = data.get("operation_code")
+    op = str(op).strip() if op else None
+    bc = data.get("barcode")
+    bc = str(bc).strip() if bc else None
+
+    try:
+        with db() as conn:
+            worker_id, _, _ = upsert_worker(conn, worker_name)
+
+            # Insert a scan if an operation or barcode is provided.
+            # If neither is provided, we just make sure the worker exists and return his/her today totals.
+            if op or bc:
+                insert_scan(conn, worker_id, op, bc)
+
+            pieces, earn = summarize_today(conn, worker_id)
+
+        return jsonify({
+            "ok": True,
+            "today_pieces": pieces,
+            "today_earn": round(earn, 2)
         })
-    return jsonify(out)
+    except Exception as e:
+        # Log to console
+        print("ERROR in /scan:", e)
+        return jsonify({"ok": False, "error": "server error"}), 500
 
-# -----------------------------------------------------------------------------
-# ESP32 Scanner endpoint
-# -----------------------------------------------------------------------------
-@app.post("/scan")
-def scan_login():
-    """
-    ESP32 should POST JSON like:
-    {
-        "secret": "<DEVICE_SECRET>",
-        "worker_name": "Alice",           # OR "worker_id": 1
-        "department": "Line A",           # optional, created if worker new
-        "operation_code": "OP10",         # optional
-        "barcode": "1234567890"           # optional
-    }
-    """
-    data = request.json or {}
-    if data.get("secret") != DEVICE_SECRET:
-        return jsonify({"ok": False, "error": "unauthorized"}), 403
 
-    worker_id = data.get("worker_id")
-    worker_name = (data.get("worker_name") or "").strip()
-    department = (data.get("department") or "").strip() or None
-    operation_id = None
-
-    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        # ensure worker
-        if not worker_id:
-            if not worker_name:
-                return jsonify({"ok": False, "error": "worker_name or worker_id required"}), 400
-            cur.execute("SELECT id FROM workers WHERE name=%s;", (worker_name,))
-            w = cur.fetchone()
-            if w:
-                worker_id = w["id"]
-                # optionally update department if provided and currently null
-                if department:
-                    cur.execute("UPDATE workers SET department=%s WHERE id=%s AND (department IS NULL OR department='');",
-                                (department, worker_id))
-            else:
-                cur.execute("INSERT INTO workers(name, department) VALUES(%s,%s) RETURNING id;",
-                            (worker_name, department))
-                worker_id = cur.fetchone()["id"]
-
-        # ensure operation if code provided
-        op_code = (data.get("operation_code") or "").strip()
-        if op_code:
-            cur.execute("SELECT id FROM operations WHERE code=%s;", (op_code,))
-            op = cur.fetchone()
-            if op:
-                operation_id = op["id"]
-            else:
-                cur.execute("INSERT INTO operations(code) VALUES(%s) RETURNING id;", (op_code,))
-                operation_id = cur.fetchone()["id"]
-
-        barcode = (data.get("barcode") or "").strip() or None
-
-        # insert scan
-        cur.execute("""
-            INSERT INTO scans(user_id, operation_id, barcode, scanned_at)
-            VALUES(%s,%s,%s,NOW())
-            RETURNING id, scanned_at;
-        """, (worker_id, operation_id, barcode))
-        row = cur.fetchone()
-
-        # compute today's pieces & earnings for this worker
-        now = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        cur.execute(f"""
-            SELECT 
-                COUNT(s.id) AS pcs,
-                COALESCE(SUM({_rate_sql()}), 0) AS earn
-            FROM scans s
-            LEFT JOIN operations ops ON ops.id = s.operation_id
-            WHERE s.user_id=%s AND s.scanned_at >= %s AND s.scanned_at < %s;
-        """, (worker_id, start, end))
-        agg = cur.fetchone()
-
-    return jsonify({
-        "ok": True,
-        "scan_id": row["id"],
-        "scanned_at": row["scanned_at"].isoformat(),
-        "today_pieces": int(agg["pcs"] or 0),
-        "today_earn": float(agg["earn"] or 0.0)
-    })
-
-# -----------------------------------------------------------------------------
-# Health
-# -----------------------------------------------------------------------------
-@app.get("/healthz")
+# -------------- Health & Ping --------------------
+@app.route("/healthz")
 def healthz():
     return "ok", 200
 
-# -----------------------------------------------------------------------------
-# Run (local)
-# -----------------------------------------------------------------------------
+
+# -------------- Main (local dev) ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    # Local debug
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=True)

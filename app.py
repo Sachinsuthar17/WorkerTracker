@@ -1,577 +1,355 @@
-# app.py
-from flask import Flask, render_template, redirect, url_for, request, jsonify, Response, abort
+import os
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
+
+from flask import Flask, jsonify, render_template, request, redirect, url_for
 from flask_cors import CORS
 import psycopg2
-import psycopg2.extras
-import io
-import os
-from datetime import datetime, date, timedelta, timezone
-from decimal import Decimal
-import qrcode
-import qrcode.image.svg
-import random
+from psycopg2.extras import RealDictCursor, RealDictRow
 
-# ---------------- APP & CORS ---------------- #
+# -----------------------------------------------------------------------------
+# Config
+# -----------------------------------------------------------------------------
+PORT = int(os.environ.get("PORT", "10000"))
+DATABASE_URL = os.environ.get("DATABASE_URL")  # e.g. render PostgreSQL URL
+DEVICE_SECRET = os.environ.get("DEVICE_SECRET", "changeme")
+RATE_PER_PIECE = float(os.environ.get("RATE_PER_PIECE", "5.0"))
+
 app = Flask(__name__)
 CORS(app)
 
-# ---------------- CONFIG ---------------- #
-DB_URL = os.getenv("DATABASE_URL")
-if not DB_URL:
-    raise RuntimeError("DATABASE_URL is not set. Add it in Render → Environment.")
+# -----------------------------------------------------------------------------
+# DB helpers
+# -----------------------------------------------------------------------------
+def _db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not configured")
+    # Render gives postgres://; psycopg prefers postgresql://
+    dburl = DATABASE_URL.replace("postgres://", "postgresql://")
+    return psycopg2.connect(dburl)
 
-DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh928hfh92hF9H2hf92h3f9h2F")
-RATE_PER_PIECE = Decimal(os.getenv("RATE_PER_PIECE", "5.0"))
-DEBUG_TOOLS = os.getenv("DEBUG_TOOLS", "1") == "1"
+def _rate_sql():
+    """
+    Returns the SQL expression that calculates the amount earned for a scan.
+    We pay priority to an operation-specific rate if available, falling back to env rate.
+    """
+    # ops.rate_per_piece is optional; COALESCE to env default
+    return f"COALESCE(ops.rate_per_piece, {RATE_PER_PIECE})"
 
-def get_conn():
-    return psycopg2.connect(DB_URL, sslmode="require")
+# -----------------------------------------------------------------------------
+# Bootstrap (create minimal schema if missing)
+# -----------------------------------------------------------------------------
+BOOTSTRAP_SQL = """
+CREATE TABLE IF NOT EXISTS workers (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    department TEXT
+);
 
-# ---------------- HELPERS ---------------- #
-def _require_secret(data):
-    if (data or {}).get("secret") != DEVICE_SECRET:
-        abort(403, description="Unauthorized")
+CREATE TABLE IF NOT EXISTS operations (
+    id SERIAL PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    description TEXT,
+    rate_per_piece NUMERIC
+);
 
-def _strip_prefix(val, prefix):
-    return val[len(prefix):] if val and val.startswith(prefix) else val
+CREATE TABLE IF NOT EXISTS worker_operations (
+    id SERIAL PRIMARY KEY,
+    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE
+);
 
-def _today_range(d: date):
-    start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-    return start, start + timedelta(days=1)
+CREATE TABLE IF NOT EXISTS scans (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    operation_id INTEGER REFERENCES operations(id),
+    barcode TEXT,
+    scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-def _rate_sql_literal() -> str:
-    return f"COALESCE(ops.rate_per_piece, {float(RATE_PER_PIECE)})"
+-- Helpful indexes
+CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans(scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans(user_id);
+CREATE INDEX IF NOT EXISTS idx_scans_operation_id ON scans(operation_id);
+"""
 
-# ---------------- INIT & MIGRATIONS ---------------- #
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
+@app.before_first_request
+def bootstrap():
+    try:
+        with _db() as conn, conn.cursor() as cur:
+            cur.execute(BOOTSTRAP_SQL)
+    except Exception as e:
+        app.logger.error("Bootstrap failed: %s", e)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS workers (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            department TEXT,
-            token_id TEXT UNIQUE,
-            status TEXT DEFAULT 'active',
-            is_logged_in BOOLEAN DEFAULT FALSE,
-            last_login TIMESTAMPTZ,
-            last_logout TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_operations (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-            operation_name TEXT NOT NULL,
-            barcode_value TEXT UNIQUE NOT NULL,
-            assigned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scans (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-            operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
-            scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            bundle_id INTEGER
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS production_logs (
-            id SERIAL PRIMARY KEY,
-            worker_id INTEGER REFERENCES workers(id) ON DELETE CASCADE,
-            operation_id INTEGER REFERENCES user_operations(id) ON DELETE CASCADE,
-            quantity INTEGER NOT NULL,
-            status TEXT DEFAULT 'completed',
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            order_no TEXT NOT NULL,
-            style_no TEXT,
-            color TEXT,
-            size TEXT,
-            qty INTEGER,
-            line TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS operations (
-            id SERIAL PRIMARY KEY,
-            order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
-            operation_name TEXT NOT NULL,
-            process TEXT,
-            rate_per_piece NUMERIC(10,2) DEFAULT %s,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """, (RATE_PER_PIECE,))
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bundles (
-            id SERIAL PRIMARY KEY,
-            order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
-            size TEXT,
-            qty INTEGER,
-            barcode_value TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Make sure new columns exist
-    cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL")
-    cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
-    cur.execute("ALTER TABLE IF EXISTS operations ADD COLUMN IF NOT EXISTS rate_per_piece NUMERIC(10,2) DEFAULT %s", (RATE_PER_PIECE,))
-
-    conn.commit()
-    conn.close()
-
-try:
-    init_db()
-except Exception as e:
-    print("DB init/migrate error:", e)
-
-# ---------------- BASIC PAGES ---------------- #
-@app.route("/healthz")
-def healthz():
-    return "ok", 200
-
-@app.route('/')
+# -----------------------------------------------------------------------------
+# Pages
+# -----------------------------------------------------------------------------
+@app.route("/")
 def dashboard():
-    return render_template('dashboard.html')
+    return render_template("dashboard.html")
 
-@app.route('/operations', endpoint='operations')
-def operations_page():
-    try:
-        return render_template('operations.html')
-    except:
-        return render_template('blank.html', title="Operations")
+@app.route("/production")
+def production():  # keep endpoint name 'production' for layout links
+    return redirect(url_for("dashboard"))
 
-@app.route('/production', endpoint='production')
-def production_page():
-    try:
-        return render_template('production.html')
-    except:
-        return render_template('blank.html', title="Production")
-
-@app.route('/assign_operations', endpoint='assign_operations')
-def assign_operations_page():
-    try:
-        return render_template('assign_operation.html')
-    except:
-        return render_template('blank.html', title="Assign Operations")
-
-@app.route('/reports', endpoint='reports')
-def reports_page():
-    try:
-        return render_template('reports.html')
-    except:
-        return render_template('blank.html', title="Reports")
-
-# Workers UI
-@app.route('/workers')
+@app.route("/workers")
 def workers():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at
-        FROM workers
-        ORDER BY created_at DESC
-    """)
-    rows = cur.fetchall()
-    conn.close()
-    return render_template('workers.html', workers=rows)
+    # list workers
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id, name, department FROM workers ORDER BY name;")
+        rows = cur.fetchall()
+    return render_template("workers.html", workers=rows)
 
-@app.route('/add_worker', methods=['POST'])
+@app.route("/operations")
+def operations_page():
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id, code, description, rate_per_piece FROM operations ORDER BY code;")
+        ops = cur.fetchall()
+    return render_template("operations.html", operations=ops)
+
+@app.route("/assign")
+def assign_operations():  # keep name 'assign_operations' for layout links
+    # fetch workers + operations for the form
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id, name FROM workers ORDER BY name;")
+        workers = cur.fetchall()
+        cur.execute("SELECT id, code FROM operations ORDER BY code;")
+        ops = cur.fetchall()
+        cur.execute("""
+            SELECT wo.id, w.name AS worker, o.code AS operation
+            FROM worker_operations wo
+            JOIN workers w ON w.id = wo.worker_id
+            JOIN operations o ON o.id = wo.operation_id
+            ORDER BY w.name, o.code;
+        """)
+        assigned = cur.fetchall()
+    return render_template("assign_operation.html", workers=workers, operations=ops, assignments=assigned)
+
+@app.route("/reports")
+def reports():
+    return render_template("reports.html")
+
+@app.route("/settings")
+def settings():
+    return render_template("settings.html", rate_per_piece=RATE_PER_PIECE, device_secret_set=bool(DEVICE_SECRET))
+
+# -----------------------------------------------------------------------------
+# JSON/AJAX endpoints for forms
+# -----------------------------------------------------------------------------
+@app.post("/workers/add")
 def add_worker():
-    name = request.form.get('name','').strip()
-    department = request.form.get('department','').strip()
-    token_id = request.form.get('token_id','').strip()
-    if not name or not token_id:
-        return "Name and Token ID required", 400
-    conn = get_conn(); cur = conn.cursor()
-    try:
-        cur.execute("INSERT INTO workers (name, department, token_id) VALUES (%s,%s,%s)", (name, department, token_id))
-        conn.commit()
-    except Exception as e:
-        conn.rollback(); conn.close(); return f"Error: {e}", 400
-    conn.close()
-    return redirect(url_for('workers'))
+    data = request.form or request.json or {}
+    name = (data.get("name") or "").strip()
+    dept = (data.get("department") or "").strip() or None
+    if not name:
+        return jsonify({"ok": False, "error": "name is required"}), 400
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("INSERT INTO workers(name, department) VALUES(%s,%s) RETURNING id;", (name, dept))
+        wid = cur.fetchone()["id"]
+    return jsonify({"ok": True, "id": wid})
 
-# ---------------- QR (Worker & Bundle) ---------------- #
-@app.get('/qr/worker/<token_id>')
-def worker_qr(token_id):
-    payload = f"W:{token_id}"
-    factory = qrcode.image.svg.SvgImage
-    img = qrcode.make(payload, image_factory=factory)
-    stream = io.BytesIO(); img.save(stream)
-    return Response(stream.getvalue(), mimetype='image/svg+xml')
+@app.post("/operations/add")
+def add_operation():
+    data = request.form or request.json or {}
+    code = (data.get("code") or "").strip()
+    desc = (data.get("description") or "").strip() or None
+    rate = data.get("rate_per_piece")
+    rate_val = float(rate) if rate not in (None, "",) else None
+    if not code:
+        return jsonify({"ok": False, "error": "code is required"}), 400
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "INSERT INTO operations(code, description, rate_per_piece) VALUES(%s,%s,%s) RETURNING id;",
+            (code, desc, rate_val)
+        )
+        oid = cur.fetchone()["id"]
+    return jsonify({"ok": True, "id": oid})
 
-@app.get('/qr/bundle/<barcode>')
-def bundle_qr(barcode):
-    payload = f"B:{barcode}"
-    factory = qrcode.image.svg.SvgImage
-    img = qrcode.make(payload, image_factory=factory)
-    stream = io.BytesIO(); img.save(stream)
-    return Response(stream.getvalue(), mimetype='image/svg+xml')
-
-# ---------------- ADMIN JSON APIS ---------------- #
-@app.post("/orders")
-def create_order():
-    d = request.get_json(silent=True) or {}
-    if not d.get("order_no"):
-        return jsonify({"status":"error","message":"order_no required"}), 400
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("""INSERT INTO orders (order_no, style_no, color, size, qty, line)
-                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                   (d.get("order_no"), d.get("style_no"), d.get("color"), d.get("size"), d.get("qty"), d.get("line")))
-    oid = cur.fetchone()[0]; conn.commit(); conn.close()
-    return jsonify({"status":"ok","id":oid})
-
-@app.post("/operations_json")
-def create_operation_json():
-    d = request.get_json(silent=True) or {}
-    if not d.get("order_id") or not d.get("operation_name"):
-        return jsonify({"status":"error","message":"order_id and operation_name required"}), 400
-    rate = Decimal(str(d.get("rate_per_piece") or RATE_PER_PIECE))
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("""INSERT INTO operations (order_id, operation_name, process, rate_per_piece)
-                   VALUES (%s,%s,%s,%s) RETURNING id""",
-                   (d.get("order_id"), d.get("operation_name"), d.get("process"), rate))
-    opid = cur.fetchone()[0]; conn.commit(); conn.close()
-    return jsonify({"status":"ok","id":opid})
-
-@app.post("/bundles")
-def create_bundle():
-    d = request.get_json(silent=True) or {}
-    if not d.get("order_id") or not d.get("barcode_value"):
-        return jsonify({"status":"error","message":"order_id and barcode_value required"}), 400
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("""INSERT INTO bundles (order_id, size, qty, barcode_value)
-                   VALUES (%s,%s,%s,%s) RETURNING id""",
-                   (d.get("order_id"), d.get("size"), d.get("qty"), d.get("barcode_value")))
-    bid = cur.fetchone()[0]; conn.commit(); conn.close()
-    return jsonify({"status":"ok","id":bid})
-
-@app.post("/assign_operation_json")
+@app.post("/assign/save")
 def assign_operation_json():
-    d = request.get_json(silent=True) or {}
-    if not d.get("user_id"):
-        return jsonify({"status":"error","message":"user_id required"}), 400
-    user_id = d.get("user_id")
-    operation_id = d.get("operation_id")  # optional
-    operation_name = d.get("operation_name") or "Operation"
-    barcode_value = f"{user_id}-{operation_name}-{int(datetime.now().timestamp())}"
+    data = request.form or request.json or {}
+    worker_id = data.get("worker_id")
+    operation_id = data.get("operation_id")
+    if not worker_id or not operation_id:
+        return jsonify({"ok": False, "error": "worker_id and operation_id are required"}), 400
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # avoid duplicates
+        cur.execute("""
+            SELECT 1 FROM worker_operations
+            WHERE worker_id=%s AND operation_id=%s
+        """, (worker_id, operation_id))
+        if not cur.fetchone():
+            cur.execute("""
+                INSERT INTO worker_operations(worker_id, operation_id) VALUES(%s,%s);
+            """, (worker_id, operation_id))
+    return jsonify({"ok": True})
 
-    conn = get_conn(); cur = conn.cursor()
-    try:
-        cur.execute("UPDATE user_operations SET is_active=FALSE WHERE user_id=%s AND is_active=TRUE", (user_id,))
-        cur.execute("""INSERT INTO user_operations (user_id, operation_name, barcode_value, operation_id, is_active)
-                       VALUES (%s,%s,%s,%s,TRUE) RETURNING id""",
-                    (user_id, operation_name, barcode_value, operation_id))
-        uoid = cur.fetchone()[0]; conn.commit()
-    except Exception as e:
-        conn.rollback(); conn.close(); return jsonify({"status":"error","message":str(e)}), 500
-    conn.close()
-    return jsonify({"status":"ok","id":uoid,"barcode_value":barcode_value})
+@app.post("/assign/delete")
+def delete_assignment():
+    data = request.form or request.json or {}
+    aid = data.get("assignment_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "assignment_id is required"}), 400
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM worker_operations WHERE id=%s;", (aid,))
+    return jsonify({"ok": True})
 
-# ---------------- ESP32 APIs ---------------- #
-@app.post('/scan')
-def scan_login():
-    data = request.get_json(silent=True) or {}
-    _require_secret(data)
-    token_id = _strip_prefix(data.get('token_id'), "W:")
-    if not token_id:
-        return jsonify({'status':'error','message':'Missing token'}), 400
-
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT id,name,department FROM workers WHERE token_id=%s", (token_id,))
-    worker = cur.fetchone()
-    if not worker:
-        conn.close()
-        return jsonify({'status':'error','message':'Worker not found'}), 404
-
-    cur.execute("UPDATE workers SET is_logged_in=TRUE, last_login=CURRENT_TIMESTAMP WHERE id=%s", (worker['id'],))
-
-    start, end = _today_range(date.today())
-    rate_sql = _rate_sql_literal()
-    cur.execute(f"""
-        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}), 0) AS earn
-        FROM scans s
-        LEFT JOIN user_operations uo ON s.operation_id = uo.id
-        LEFT JOIN operations ops ON uo.operation_id = ops.id
-        WHERE s.user_id=%s AND s.scanned_at >= %s AND s.scanned_at < %s
-    """, (worker['id'], start, end))
-    row = cur.fetchone()
-    conn.commit(); conn.close()
-
-    return jsonify({'status':'success',
-                    'name': worker['name'],
-                    'department': worker['department'],
-                    'scans_today': int(row['pcs'] or 0),
-                    'earnings': float(row['earn'] or 0.0)})
-
-@app.post('/logout')
-def logout():
-    data = request.get_json(silent=True) or {}
-    _require_secret(data)
-    token_id = _strip_prefix(data.get('token_id'), "W:")
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE workers SET is_logged_in=FALSE, last_logout=CURRENT_TIMESTAMP WHERE token_id=%s", (token_id,))
-    conn.commit(); conn.close()
-    return jsonify({'status':'success'})
-
-@app.post('/scan_operation')
-def scan_operation():
-    data = request.get_json(silent=True) or {}
-    _require_secret(data)
-
-    token_id = _strip_prefix(data.get('token_id'), "W:")
-    barcode_value = _strip_prefix(data.get('barcode'), "B:")
-    if not token_id or not barcode_value:
-        return jsonify({'status':'error','message':'Missing fields'}), 400
-
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    cur.execute("SELECT id,name,department FROM workers WHERE token_id=%s", (token_id,))
-    worker = cur.fetchone()
-    if not worker:
-        conn.close()
-        return jsonify({'status':'error','message':'Worker not found'}), 404
-
-    cur.execute("""SELECT id, operation_id FROM user_operations
-                   WHERE user_id=%s AND is_active=TRUE
-                   ORDER BY assigned_at DESC LIMIT 1""", (worker['id'],))
-    uo = cur.fetchone()
-    if not uo:
-        cur.execute("""SELECT id, operation_id FROM user_operations
-                       WHERE barcode_value=%s ORDER BY assigned_at DESC LIMIT 1""", (barcode_value,))
-        uo = cur.fetchone()
-        if not uo:
-            conn.close()
-            return jsonify({'status':'error','message':'No active operation assigned or invalid barcode'}), 400
-
-    cur.execute("SELECT id FROM bundles WHERE barcode_value=%s", (barcode_value,))
-    b = cur.fetchone()
-    bundle_id = b['id'] if b else None
-
-    cur.execute("""INSERT INTO scans (user_id, operation_id, scanned_at, bundle_id)
-                   VALUES (%s,%s,CURRENT_TIMESTAMP,%s)""",
-                   (worker['id'], uo['id'], bundle_id))
-
-    start, end = _today_range(date.today())
-    rate_sql = _rate_sql_literal()
-    cur.execute(f"""
-        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}), 0) AS earn
-        FROM scans s
-        LEFT JOIN user_operations u ON s.operation_id=u.id
-        LEFT JOIN operations ops ON u.operation_id=ops.id
-        WHERE s.user_id=%s AND s.scanned_at >= %s AND s.scanned_at < %s
-    """, (worker['id'], start, end))
-    row = cur.fetchone()
-    conn.commit(); conn.close()
-
-    return jsonify({'status':'success',
-                    'name': worker['name'],
-                    'department': worker['department'],
-                    'scans_today': int(row['pcs'] or 0),
-                    'earnings': float(row['earn'] or 0.0)})
-
-# ---------------- DASHBOARD APIS ---------------- #
+# -----------------------------------------------------------------------------
+# Dashboard APIs
+# -----------------------------------------------------------------------------
 @app.get("/api/stats")
 def api_stats():
-    d_str = request.args.get("date")
-    d = date.fromisoformat(d_str) if d_str else date.today()
-    start, end = _today_range(d)
-    line = request.args.get("line")
-    order_no = request.args.get("order")
-
-    conn = get_conn(); cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    filters = ["s.scanned_at >= %s AND s.scanned_at < %s"]
-    params = [start, end]
-    join_order = ""
-
-    if line and line != "all":
-        filters.append("w.department=%s"); params.append(line)
-
-    if order_no and order_no != "all":
-        join_order = """
-            LEFT JOIN user_operations uo2 ON s.operation_id = uo2.id
-            LEFT JOIN operations ops2 ON uo2.operation_id = ops2.id
-            LEFT JOIN orders ord2 ON ops2.order_id = ord2.id
-        """
-        filters.append("ord2.order_no=%s"); params.append(order_no)
-
-    where = " AND ".join(filters)
-    rate_sql = _rate_sql_literal()
-
-    cur.execute(f"SELECT COUNT(s.id) AS pieces FROM scans s JOIN workers w ON s.user_id=w.id {join_order} WHERE {where}", params)
-    total_pieces = int(cur.fetchone()["pieces"] or 0)
-
-    cur.execute(f"""SELECT COALESCE(SUM({rate_sql}),0) AS earn
-                    FROM scans s
-                    LEFT JOIN user_operations uo ON s.operation_id = uo.id
-                    LEFT JOIN operations ops ON uo.operation_id = ops.id
-                    JOIN workers w ON s.user_id=w.id
-                    {join_order} WHERE {where}""", params)
-    total_earnings = float(cur.fetchone()["earn"] or 0.0)
-
-    cur.execute("SELECT COUNT(*) FROM workers WHERE is_logged_in=TRUE")
-    active_workers = int(cur.fetchone()[0])
-
-    cur.execute(f"""SELECT COALESCE(AVG({rate_sql}), {float(RATE_PER_PIECE)}) AS avg_rate
-                    FROM scans s
-                    LEFT JOIN user_operations uo ON s.operation_id=uo.id
-                    LEFT JOIN operations ops ON uo.operation_id=ops.id
-                    WHERE s.scanned_at >= %s AND s.scanned_at < %s""", (start, end))
-    average_rate = float(cur.fetchone()["avg_rate"] or float(RATE_PER_PIECE))
-
-    cur.execute(f"""SELECT date_trunc('hour', s.scanned_at) AS h,
-                           COUNT(s.id) AS pcs,
-                           COALESCE(SUM({rate_sql}),0) AS earn
-                    FROM scans s
-                    LEFT JOIN user_operations uo ON s.operation_id=uo.id
-                    LEFT JOIN operations ops ON uo.operation_id=ops.id
-                    JOIN workers w ON s.user_id=w.id
-                    {join_order} WHERE {where}
-                    GROUP BY h ORDER BY h""", params)
-    by_hour = [{"hour": r["h"].strftime("%H:00"), "pieces": int(r["pcs"]), "earnings": float(r["earn"])} for r in cur.fetchall()]
-
-    cur.execute(f"""SELECT w.name AS worker, COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}),0) AS earn
-                    FROM scans s
-                    LEFT JOIN user_operations uo ON s.operation_id=uo.id
-                    LEFT JOIN operations ops ON uo.operation_id=ops.id
-                    JOIN workers w ON s.user_id=w.id
-                    {join_order} WHERE {where}
-                    GROUP BY w.name ORDER BY pcs DESC LIMIT 10""", params)
-    top_workers = [{"name": r["worker"], "pieces": int(r["pcs"]), "earnings": float(r["earn"])} for r in cur.fetchall()]
-    conn.close()
-
+    """Return quick totals for 'today' in server UTC."""
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(f"""
+            SELECT 
+                COUNT(s.id) AS pieces,
+                COALESCE(SUM({_rate_sql()}), 0) AS amount
+            FROM scans s
+            LEFT JOIN operations ops ON ops.id = s.operation_id
+            WHERE s.scanned_at >= %s AND s.scanned_at < %s;
+        """, (start, end))
+        row: RealDictRow = cur.fetchone()
     return jsonify({
-        "totalPiecesToday": total_pieces,
-        "totalEarningsToday": total_earnings,
-        "activeWorkers": active_workers,
-        "averageRate": average_rate,
-        "byHour": by_hour,
-        "topWorkers": top_workers
+        "pieces": int(row["pieces"] or 0),
+        "amount": float(row["amount"] or 0.0)
     })
 
 @app.get("/api/activities")
 def api_activities():
-    d_str = request.args.get("date")
-    d = date.fromisoformat(d_str) if d_str else date.today()
-    start, end = _today_range(d)
-    line = request.args.get("line")
-    order_no = request.args.get("order")
+    """
+    Latest 100 scan events with worker name, department (line), operation code, and amount.
+    IMPORTANT: Does NOT assume 'bundle_id' exists; no join to bundles.
+    """
+    limit = int(request.args.get("limit", 100))
+    limit = max(1, min(limit, 200))
 
-    conn = get_conn(); cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(f"""
+            SELECT
+                s.scanned_at AS ts,
+                w.name AS worker,
+                w.department AS line,
+                ops.code AS operation,
+                {_rate_sql()} AS amount,
+                s.barcode AS barcode
+            FROM scans s
+            LEFT JOIN workers w ON w.id = s.user_id
+            LEFT JOIN operations ops ON ops.id = s.operation_id
+            ORDER BY s.scanned_at DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
 
-    filters = ["s.scanned_at >= %s AND s.scanned_at < %s"]
-    params = [start, end]
-    join_order = ""
-    if line and line != "all":
-        filters.append("w.department=%s"); params.append(line)
-    if order_no and order_no != "all":
-        join_order = """
-            LEFT JOIN user_operations uo2 ON s.operation_id = uo2.id
-            LEFT JOIN operations ops2 ON uo2.operation_id = ops2.id
-            LEFT JOIN orders ord2 ON ops2.order_id = ord2.id
-        """
-        filters.append("ord2.order_no=%s"); params.append(order_no)
-    where = " AND ".join(filters)
-    rate_sql = _rate_sql_literal()
+    out = []
+    for r in rows:
+        out.append({
+            "ts": r["ts"].isoformat() if r["ts"] else None,
+            "worker": r["worker"],
+            "line": r["line"],
+            "operation": r["operation"],
+            "amount": float(r["amount"] or 0.0),
+            "barcode": r.get("barcode"),
+        })
+    return jsonify(out)
 
-    cur.execute(f"""
-        SELECT s.scanned_at AS ts, w.name AS worker, w.department AS line,
-               ord.order_no AS order_no, ops.operation_name AS op,
-               b.barcode_value AS bundle_code, {rate_sql} AS earn
-        FROM scans s
-        JOIN workers w ON s.user_id = w.id
-        LEFT JOIN user_operations uo ON s.operation_id = uo.id
-        LEFT JOIN operations ops ON uo.operation_id = ops.id
-        LEFT JOIN bundles b ON s.bundle_id = b.id
-        LEFT JOIN orders ord ON ops.order_id = ord.id
-        {join_order}
-        WHERE {where}
-        ORDER BY s.scanned_at DESC
-        LIMIT 100
-    """, params)
-    rows = cur.fetchall(); conn.close()
+# -----------------------------------------------------------------------------
+# ESP32 Scanner endpoint
+# -----------------------------------------------------------------------------
+@app.post("/scan")
+def scan_login():
+    """
+    ESP32 should POST JSON like:
+    {
+        "secret": "<DEVICE_SECRET>",
+        "worker_name": "Alice",           # OR "worker_id": 1
+        "department": "Line A",           # optional, created if worker new
+        "operation_code": "OP10",         # optional
+        "barcode": "1234567890"           # optional
+    }
+    """
+    data = request.json or {}
+    if data.get("secret") != DEVICE_SECRET:
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
 
-    data = [{"time": r["ts"].isoformat(), "worker": r["worker"], "line": r["line"],
-             "order": r["order_no"], "operation": r["op"], "bundle": r["bundle_code"],
-             "pieces": 1, "earnings": float(r["earn"])} for r in rows]
-    return jsonify(data)
+    worker_id = data.get("worker_id")
+    worker_name = (data.get("worker_name") or "").strip()
+    department = (data.get("department") or "").strip() or None
+    operation_id = None
 
-# --------- DEBUG HELP: create a fake scan so you can see the dashboard move ---------
-@app.get("/debug/mock_scan")
-def debug_mock_scan():
-    if not DEBUG_TOOLS:
-        return jsonify({"status": "disabled"}), 403
+    with _db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # ensure worker
+        if not worker_id:
+            if not worker_name:
+                return jsonify({"ok": False, "error": "worker_name or worker_id required"}), 400
+            cur.execute("SELECT id FROM workers WHERE name=%s;", (worker_name,))
+            w = cur.fetchone()
+            if w:
+                worker_id = w["id"]
+                # optionally update department if provided and currently null
+                if department:
+                    cur.execute("UPDATE workers SET department=%s WHERE id=%s AND (department IS NULL OR department='');",
+                                (department, worker_id))
+            else:
+                cur.execute("INSERT INTO workers(name, department) VALUES(%s,%s) RETURNING id;",
+                            (worker_name, department))
+                worker_id = cur.fetchone()["id"]
 
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        # ensure operation if code provided
+        op_code = (data.get("operation_code") or "").strip()
+        if op_code:
+            cur.execute("SELECT id FROM operations WHERE code=%s;", (op_code,))
+            op = cur.fetchone()
+            if op:
+                operation_id = op["id"]
+            else:
+                cur.execute("INSERT INTO operations(code) VALUES(%s) RETURNING id;", (op_code,))
+                operation_id = cur.fetchone()["id"]
 
-    # 1) ensure at least one worker
-    cur.execute("SELECT id, token_id FROM workers LIMIT 1")
-    w = cur.fetchone()
-    if not w:
-        token = "WID" + str(random.randint(1000, 9999))
-        cur.execute("INSERT INTO workers (name, department, token_id, is_logged_in) VALUES (%s,%s,%s,TRUE) RETURNING id, token_id",
-                    ("Demo Worker", "LINE-1", token))
-        w = cur.fetchone()
+        barcode = (data.get("barcode") or "").strip() or None
 
-    # 2) ensure one order + op + assignment
-    cur.execute("SELECT id FROM orders LIMIT 1")
-    ord_row = cur.fetchone()
-    if not ord_row:
-        cur.execute("INSERT INTO orders (order_no, style_no, color, size, qty, line) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-                    ("PO-1001", "STYLE-7", "BLUE", "40", 1000, "LINE-1"))
-        ord_row = cur.fetchone()
+        # insert scan
+        cur.execute("""
+            INSERT INTO scans(user_id, operation_id, barcode, scanned_at)
+            VALUES(%s,%s,%s,NOW())
+            RETURNING id, scanned_at;
+        """, (worker_id, operation_id, barcode))
+        row = cur.fetchone()
 
-    order_id = ord_row["id"]
+        # compute today's pieces & earnings for this worker
+        now = datetime.now(timezone.utc)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        cur.execute(f"""
+            SELECT 
+                COUNT(s.id) AS pcs,
+                COALESCE(SUM({_rate_sql()}), 0) AS earn
+            FROM scans s
+            LEFT JOIN operations ops ON ops.id = s.operation_id
+            WHERE s.user_id=%s AND s.scanned_at >= %s AND s.scanned_at < %s;
+        """, (worker_id, start, end))
+        agg = cur.fetchone()
 
-    cur.execute("SELECT id FROM operations WHERE order_id=%s LIMIT 1", (order_id,))
-    op_row = cur.fetchone()
-    if not op_row:
-        cur.execute("INSERT INTO operations (order_id, operation_name, process, rate_per_piece) VALUES (%s,%s,%s,%s) RETURNING id",
-                    (order_id, "Stitch", "Sewing", RATE_PER_PIECE))
-        op_row = cur.fetchone()
+    return jsonify({
+        "ok": True,
+        "scan_id": row["id"],
+        "scanned_at": row["scanned_at"].isoformat(),
+        "today_pieces": int(agg["pcs"] or 0),
+        "today_earn": float(agg["earn"] or 0.0)
+    })
 
-    cur.execute("""SELECT id FROM user_operations WHERE user_id=%s AND is_active=TRUE
-                   ORDER BY assigned_at DESC LIMIT 1""", (w["id"],))
-    uo = cur.fetchone()
-    if not uo:
-        bc = f"{w['id']}-Stitch-{int(datetime.now().timestamp())}"
-        cur.execute("""INSERT INTO user_operations (user_id, operation_name, barcode_value, operation_id, is_active)
-                       VALUES (%s,%s,%s,%s,TRUE) RETURNING id""",
-                    (w["id"], "Stitch", bc, op_row["id"]))
-        uo = cur.fetchone()
+# -----------------------------------------------------------------------------
+# Health
+# -----------------------------------------------------------------------------
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
 
-    # 3) make a fake bundle and scan
-    bcode = "BUND-" + str(random.randint(10000, 99999))
-    cur.execute("INSERT INTO bundles (order_id, size, qty, barcode_value) VALUES (%s,%s,%s,%s) RETURNING id",
-                (order_id, "40", 10, bcode))
-    b = cur.fetchone()
-
-    cur.execute("INSERT INTO scans (user_id, operation_id, scanned_at, bundle_id) VALUES (%s,%s,CURRENT_TIMESTAMP,%s)",
-                (w["id"], uo["id"], b["id"]))
-    conn.commit(); conn.close()
-
-    return jsonify({"status": "ok", "note": "One demo scan inserted."})
-
-# ---------------- RUN ---------------- #
+# -----------------------------------------------------------------------------
+# Run (local)
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=PORT, debug=True)

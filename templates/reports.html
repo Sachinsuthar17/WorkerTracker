@@ -1,8 +1,17 @@
 {% extends "layout.html" %}
+{% set title = "Reports" %}
 {% block content %}
-<header class="page-header"><h1>Reports</h1></header>
-<p class="muted">
-  The dashboard already aggregates today’s production via <span class="code">/api/stats</span> and the live feed via <span class="code">/api/activities</span>.
-  Add dedicated reports later if you add Flask routes.
-</p>
+<section class="grid gap-6">
+  <header>
+    <h1 class="text-xl font-semibold">Reports</h1>
+    <p class="text-sm text-slate-500">Export and review production activity.</p>
+  </header>
+
+  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+    <p class="text-sm text-slate-600">
+      Coming soon: export CSV by date, worker, line, operation.
+      For now, see live activity on the Dashboard.
+    </p>
+  </div>
+</section>
 {% endblock %}

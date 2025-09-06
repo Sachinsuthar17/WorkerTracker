@@ -1,18 +1,89 @@
 {% extends "layout.html" %}
 {% set title = "Workers" %}
+
 {% block content %}
 <section class="grid gap-4">
   <header class="flex items-end justify-between">
     <div>
       <h1 class="text-xl font-semibold">Workers</h1>
-      <p class="text-sm text-slate-500">Manage workers and departments (read-only placeholder).</p>
+      <p class="text-sm text-slate-500">Add workers and generate QR codes for login.</p>
     </div>
   </header>
 
+  <!-- Add Worker Card -->
   <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <p class="text-sm text-slate-600">
-      This page is ready for future enhancements (add/edit workers). The live counts are shown on the Dashboard.
-    </p>
+    <form class="grid md:grid-cols-3 gap-4 items-end" method="post" action="{{ url_for('workers_add') }}">
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Name</label>
+        <input name="name" type="text" placeholder="e.g. Rakesh Kumar"
+               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Department / Line</label>
+        <input name="department" type="text" placeholder="e.g. Stitching A"
+               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
+      </div>
+      <div>
+        <button type="submit"
+                class="w-full h-10 rounded-xl bg-sky-600 text-white font-medium hover:bg-sky-700 transition">
+          + Add Worker & Generate QR
+        </button>
+      </div>
+    </form>
+    <p class="mt-2 text-xs text-slate-500">A unique token is created automatically. The QR encodes <code>W:&lt;token&gt;</code> for the ESP32.</p>
+  </div>
+
+  <!-- Worker List -->
+  <div class="bg-white rounded-2xl p-0 shadow-card border border-slate-100 overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-sm font-semibold">All Workers</h2>
+      <span class="text-xs text-slate-500">{{ workers|length }} total</span>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="text-left px-5 py-3 font-medium">ID</th>
+            <th class="text-left px-5 py-3 font-medium">Name</th>
+            <th class="text-left px-5 py-3 font-medium">Department</th>
+            <th class="text-left px-5 py-3 font-medium">Token</th>
+            <th class="text-left px-5 py-3 font-medium">QR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for w in workers %}
+          <tr id="w{{ w.id }}" class="border-t border-slate-100 hover:bg-slate-50/50">
+            <td class="px-5 py-3 text-slate-600">{{ w.id }}</td>
+            <td class="px-5 py-3 font-medium">{{ w.name or "(no name)" }}</td>
+            <td class="px-5 py-3">{{ w.department }}</td>
+            <td class="px-5 py-3">
+              <code class="text-slate-600">{{ w.token_id or "—" }}</code>
+            </td>
+            <td class="px-5 py-3">
+              {% if w.token_id %}
+              <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
+                 href="{{ url_for('worker_qr_png', worker_id=w.id) }}" target="_blank" title="Open PNG QR">
+                PNG
+              </a>
+              <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
+                 href="{{ url_for('worker_qr_svg', worker_id=w.id) }}" target="_blank" title="Open SVG QR">
+                SVG
+              </a>
+              {% else %}
+              <span class="text-xs text-slate-400">No token</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if workers|length == 0 %}
+          <tr>
+            <td colspan="5" class="px-5 py-6 text-center text-slate-500">No workers yet. Add one above.</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 {% endblock %}

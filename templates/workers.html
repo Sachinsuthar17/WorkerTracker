@@ -1,36 +1,18 @@
 {% extends "layout.html" %}
+{% set title = "Workers" %}
 {% block content %}
-<header class="page-header"><h1>Workers</h1></header>
+<section class="grid gap-4">
+  <header class="flex items-end justify-between">
+    <div>
+      <h1 class="text-xl font-semibold">Workers</h1>
+      <p class="text-sm text-slate-500">Manage workers and departments (read-only placeholder).</p>
+    </div>
+  </header>
 
-<div class="card">
-  <form id="f-add" class="row" onsubmit="return false;">
-    <input name="name" placeholder="Worker name" required>
-    <input name="department" placeholder="Department / Line">
-    <button class="btn">Add</button>
-  </form>
-</div>
-<div style="height:12px;"></div>
-
-<div class="card">
-  <div class="muted">All workers</div>
-  <div style="height:8px;"></div>
-  <div style="overflow:auto;">
-    <table>
-      <thead><tr><th>Name</th><th>Department</th></tr></thead>
-      <tbody>
-        {% for w in workers %}
-        <tr><td>{{ w.name }}</td><td>{{ w.department or "" }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+    <p class="text-sm text-slate-600">
+      This page is ready for future enhancements (add/edit workers). The live counts are shown on the Dashboard.
+    </p>
   </div>
-</div>
-
-<script>
-  document.querySelector("#f-add").addEventListener("submit", async (e)=>{
-    const fd = new FormData(e.target);
-    const r = await fetch("/workers/add", {method:"POST", body:fd});
-    if(r.ok){ location.reload(); } else { alert(await r.text()); }
-  });
-</script>
+</section>
 {% endblock %}

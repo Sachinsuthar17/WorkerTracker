@@ -1,60 +1,14 @@
 {% extends "layout.html" %}
+{% set title = "Assign Operation" %}
 {% block content %}
-<header class="page-header"><h1>Assign Operations</h1></header>
+<section class="grid gap-4">
+  <header>
+    <h1 class="text-xl font-semibold">Assign Operation</h1>
+    <p class="text-sm text-slate-500">Link workers to current lines/targets (UI placeholder).</p>
+  </header>
 
-<div class="card">
-  <form id="f-assign" class="row" onsubmit="return false;">
-    <select name="worker_id" required>
-      <option value="">Select worker…</option>
-      {% for w in workers %}
-        <option value="{{ w.id }}">{{ w.name }}</option>
-      {% endfor %}
-    </select>
-    <select name="operation_id" required>
-      <option value="">Select operation…</option>
-      {% for o in operations %}
-        <option value="{{ o.id }}">{{ o.code }}</option>
-      {% endfor %}
-    </select>
-    <button class="btn">Assign</button>
-  </form>
-</div>
-<div style="height:12px;"></div>
-
-<div class="card">
-  <div class="muted">Current assignments</div>
-  <div style="height:8px;"></div>
-  <div style="overflow:auto;">
-    <table id="tbl">
-      <thead><tr><th>Worker</th><th>Operation</th><th></th></tr></thead>
-      <tbody>
-        {% for a in assignments %}
-        <tr data-id="{{ a.id }}">
-          <td>{{ a.worker }}</td>
-          <td class="code">{{ a.operation }}</td>
-          <td class="right"><button class="btn secondary btn-del">Remove</button></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+    <p class="text-sm text-slate-600">Your ESP32 scans determine the worker currently active; additional assignment UI can be added here later.</p>
   </div>
-</div>
-
-<script>
-  document.querySelector("#f-assign").addEventListener("submit", async (e)=>{
-    const fd = new FormData(e.target);
-    const r = await fetch("/assign/save", {method:"POST", body:fd});
-    if(r.ok){ location.reload(); } else { alert(await r.text()); }
-  });
-
-  document.querySelectorAll(".btn-del").forEach(btn=>{
-    btn.addEventListener("click", async (e)=>{
-      const tr = e.target.closest("tr");
-      const id = tr.dataset.id;
-      const fd = new FormData(); fd.append("assignment_id", id);
-      const r = await fetch("/assign/delete", {method:"POST", body:fd});
-      if(r.ok){ tr.remove(); } else { alert(await r.text()); }
-    });
-  });
-</script>
+</section>
 {% endblock %}

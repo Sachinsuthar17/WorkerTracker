@@ -1,300 +1,371 @@
 import os
 import io
-from contextlib import closing
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Tuple, Optional
 
 from flask import (
-    Flask, request, jsonify, render_template, redirect,
-    url_for, flash, abort, g, send_file
+    Flask, request, jsonify, render_template, redirect, url_for, flash, send_file
 )
 from flask_cors import CORS
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import SimpleConnectionPool
+import psycopg2.extras
+import segno
 
-# Optional: QR generation (used by /workers/<id>/qr.png)
-try:
-    import qrcode
-except Exception:  # pragma: no cover
-    qrcode = None
+# -----------------------------------------------------------------------------
+# App config
+# -----------------------------------------------------------------------------
+APP_BRAND = os.getenv("APP_BRAND", "Banswara Scanner")
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
+RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "2.00"))
 
-# ------------------------------------------------------------------------------
-# App & Config
-# ------------------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required.")
+
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 CORS(app)
 
-# Set a secret key for flashes (adjust for your environment)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
-
-DATABASE_URL = os.environ["DATABASE_URL"]
-DB_SSLMODE = os.getenv("DB_SSLMODE", "require")
-POOL = SimpleConnectionPool(
-    minconn=1,
-    maxconn=int(os.getenv("DB_MAX_CONN", "10")),
-    dsn=DATABASE_URL,
-    sslmode=DB_SSLMODE,
-)
-
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # DB helpers
-# ------------------------------------------------------------------------------
-def get_db():
-    """Get a pooled connection for this request."""
-    if "dbconn" not in g:
-        g.dbconn = POOL.getconn()
-        g.dbconn.autocommit = True
-    return g.dbconn
+# -----------------------------------------------------------------------------
+def db_connect():
+    # Render Postgres URL is already in the correct format
+    return psycopg2.connect(
+        DATABASE_URL,
+        sslmode="require",
+        cursor_factory=psycopg2.extras.RealDictCursor
+    )
 
-@app.teardown_request
-def _return_conn(exc):
-    conn = g.pop("dbconn", None)
-    if conn is not None:
-        POOL.putconn(conn)
+def ensure_schema() -> None:
+    """Create/upgrade schema. Opens its own connection (no nesting)."""
+    conn = db_connect()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # Workers
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workers (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        token_id TEXT UNIQUE NOT NULL,
+                        department TEXT DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                # Scans (each scanned piece)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS scans (
+                        id SERIAL PRIMARY KEY,
+                        worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+                        barcode TEXT,
+                        scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                # Indexes
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans (scanned_at DESC);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_worker_scanned ON scans (worker_id, scanned_at DESC);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_workers_token ON workers (token_id);")
+    finally:
+        conn.close()
 
-def fetchone_dict(cur) -> Optional[dict]:
-    row = cur.fetchone()
-    if row is None:
-        return None
-    if isinstance(row, dict):
-        return row
-    # map tuple → dict when cursor_factory not set
-    desc = [c.name for c in cur.description]
-    return dict(zip(desc, row))
+def today_bounds_utc() -> Tuple[datetime, datetime]:
+    now = datetime.now(timezone.utc)
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    return start, end
 
-# ------------------------------------------------------------------------------
-# Schema (run ONCE at worker boot, not per request)
-# ------------------------------------------------------------------------------
-def ensure_schema_once():
-    with closing(psycopg2.connect(DATABASE_URL, sslmode=DB_SSLMODE)) as conn:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            # Workers
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS workers (
-              id SERIAL PRIMARY KEY,
-              name TEXT NOT NULL,
-              qrcode TEXT,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """)
-            # Activities (for /api/activities)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS activities (
-              id SERIAL PRIMARY KEY,
-              event TEXT NOT NULL,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """)
-            # Operations (used by /operations and /operations/add)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS operations (
-              id SERIAL PRIMARY KEY,
-              name TEXT NOT NULL,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """)
-    app.config["SCHEMA_READY"] = True
+# -----------------------------------------------------------------------------
+# First-request guard
+# -----------------------------------------------------------------------------
+_initialized = False
 
-with app.app_context():
-    if not app.config.get("SCHEMA_READY"):
-        ensure_schema_once()
+@app.before_request
+def _guard_init():
+    global _initialized
+    if _initialized:
+        return
+    ensure_schema()
+    _initialized = True
 
-# ------------------------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Template globals
+# -----------------------------------------------------------------------------
+@app.context_processor
+def inject_globals():
+    # Provide brand, rate and a small now() helper so your template footer works.
+    return dict(
+        brand=APP_BRAND,
+        rate_per_piece=RATE_PER_PIECE,
+        now=lambda: datetime.now()
+    )
 
+# -----------------------------------------------------------------------------
+# Pages
+# -----------------------------------------------------------------------------
 @app.get("/")
-def home():
-    # Keep your existing index template if you have one; otherwise this is fine.
-    return render_template("index.html") if os.path.exists(
-        os.path.join(app.root_path, "templates", "index.html")
-    ) else """
-    <!doctype html>
-    <meta charset="utf-8">
-    <title>ESP32 API Server</title>
-    <h1>Service is live 🎉</h1>
-    <ul>
-      <li><a href="/api/stats">/api/stats</a></li>
-      <li><a href="/workers">/workers</a></li>
-      <li><a href="/operations">/operations</a></li>
-      <li><a href="/assign_operation">/assign_operation</a></li>
-      <li><a href="/reports">/reports</a></li>
-    </ul>
-    """
+def dashboard():
+    return render_template("dashboard.html")
 
-# -------------------------- API: stats & activities ---------------------------
+@app.get("/operations")
+def operations_page():
+    return render_template("operations.html")
 
+@app.get("/assign_operation")
+def assign_operation_page():
+    return render_template("assign_operation.html")
+
+@app.get("/reports")
+def reports_page():
+    return render_template("reports.html")
+
+@app.get("/settings")
+def settings_page():
+    return render_template("settings.html")
+
+# -----------------------------------------------------------------------------
+# Workers CRUD + QR
+# -----------------------------------------------------------------------------
+@app.get("/workers")
+def workers_page():
+    q = (request.args.get("q") or "").strip()
+    with db_connect() as conn, conn.cursor() as cur:
+        if q:
+            cur.execute("""
+                SELECT id, name, token_id, department, created_at
+                FROM workers
+                WHERE name ILIKE %s OR token_id ILIKE %s OR department ILIKE %s
+                ORDER BY created_at DESC
+            """, (f"%{q}%", f"%{q}%", f"%{q}%"))
+        else:
+            cur.execute("""
+                SELECT id, name, token_id, department, created_at
+                FROM workers
+                ORDER BY created_at DESC
+            """)
+        workers = cur.fetchall()
+    return render_template("workers.html", workers=workers, search=q)
+
+@app.post("/workers/create")
+def worker_create():
+    name = (request.form.get("name") or "").strip()
+    token = (request.form.get("token_id") or "").strip()
+    dept  = (request.form.get("department") or "").strip()
+    if not name or not token:
+        flash("Name and Token are required.", "error")
+        return redirect(url_for("workers_page"))
+    if token.upper().startswith("W:"):
+        token = token[2:]
+
+    try:
+        with db_connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO workers (name, token_id, department)
+                VALUES (%s,%s,%s)
+                RETURNING id
+            """, (name, token, dept))
+    except psycopg2.Error:
+        flash("Token already exists or invalid input.", "error")
+        return redirect(url_for("workers_page"))
+
+    flash("Worker created.", "success")
+    return redirect(url_for("workers_page"))
+
+@app.post("/workers/<int:wid>/edit")
+def worker_edit(wid: int):
+    name = (request.form.get("name") or "").strip()
+    token = (request.form.get("token_id") or "").strip()
+    dept  = (request.form.get("department") or "").strip()
+    if not name or not token:
+        flash("Name and Token are required.", "error")
+        return redirect(url_for("workers_page"))
+    if token.upper().startswith("W:"):
+        token = token[2:]
+
+    try:
+        with db_connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE workers
+                SET name=%s, token_id=%s, department=%s
+                WHERE id=%s
+            """, (name, token, dept, wid))
+    except psycopg2.Error:
+        flash("Token already used by another worker.", "error")
+        return redirect(url_for("workers_page"))
+
+    flash("Worker updated.", "success")
+    return redirect(url_for("workers_page"))
+
+@app.post("/workers/<int:wid>/delete")
+def worker_delete(wid: int):
+    with db_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM workers WHERE id=%s", (wid,))
+    flash("Worker deleted.", "success")
+    return redirect(url_for("workers_page"))
+
+@app.get("/workers/<int:wid>/qr.png")
+def worker_qr_png(wid: int):
+    with db_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT token_id FROM workers WHERE id=%s", (wid,))
+        row = cur.fetchone()
+    if not row:
+        return "Not found", 404
+
+    payload = f"W:{row['token_id']}"
+    qr = segno.make(payload, error="M")
+    buf = io.BytesIO()
+    qr.save(buf, kind="png", scale=8, border=2)
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png", download_name=f"worker_{wid}_qr.png")
+
+@app.get("/workers/<int:wid>/print")
+def worker_print(wid: int):
+    with db_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, name, token_id, department FROM workers WHERE id=%s", (wid,))
+        row = cur.fetchone()
+    if not row:
+        return "Not found", 404
+    return render_template("worker_print.html", worker=row)
+
+# -----------------------------------------------------------------------------
+# Public API used by dashboard cards
+# -----------------------------------------------------------------------------
 @app.get("/api/stats")
 def api_stats():
-    conn = get_db()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT COUNT(*) AS workers FROM workers;")
-        workers = cur.fetchone()["workers"]
+    start, end = today_bounds_utc()
+    with db_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS pieces_today FROM scans WHERE scanned_at >= %s AND scanned_at < %s", (start, end))
+        pieces_today = (cur.fetchone() or {}).get("pieces_today", 0)
 
-        cur.execute("SELECT COUNT(*) AS operations FROM operations;")
-        operations = cur.fetchone()["operations"]
+        cur.execute("""
+            SELECT COUNT(DISTINCT worker_id) AS workers_today
+            FROM scans
+            WHERE scanned_at >= %s AND scanned_at < %s
+        """, (start, end))
+        workers_today = (cur.fetchone() or {}).get("workers_today", 0)
 
-        cur.execute("SELECT COUNT(*) AS activities FROM activities;")
-        activities = cur.fetchone()["activities"]
-
+    earnings = float(pieces_today) * RATE_PER_PIECE
     return jsonify({
-        "workers": workers,
-        "operations": operations,
-        "activities": activities,
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "pieces_today": int(pieces_today),
+        "workers_today": int(workers_today),
+        "earnings_today": round(earnings, 2)
     })
 
 @app.get("/api/activities")
 def api_activities():
-    limit = max(1, min(int(request.args.get("limit", 100)), 1000))
-    conn = get_db()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            "SELECT id, event, created_at FROM activities ORDER BY id DESC LIMIT %s;",
-            (limit,),
-        )
+    limit = max(1, min(int(request.args.get("limit", "100")), 500))
+    with db_connect() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT s.scanned_at AS ts,
+                   w.name AS worker,
+                   w.department AS line,
+                   s.barcode AS info
+            FROM scans s
+            JOIN workers w ON w.id = s.worker_id
+            ORDER BY s.scanned_at DESC
+            LIMIT %s
+        """, (limit,))
         rows = cur.fetchall()
-    return jsonify(rows)
+    items = [{
+        "ts": r["ts"].isoformat(),
+        "worker": r["worker"],
+        "line": r["line"],
+        "info": r["info"] or ""
+    } for r in rows]
+    return jsonify({"items": items})
 
-# -------------------------------- Workers UI ---------------------------------
+# -----------------------------------------------------------------------------
+# ESP32 unified endpoint (/scan) — handles login AND piece save
+# -----------------------------------------------------------------------------
+def _require_secret(payload: dict) -> bool:
+    return payload.get("secret") == DEVICE_SECRET
 
-@app.get("/workers")
-def workers_page():
-    q = (request.args.get("q") or "").strip()
-    sql = "SELECT id, name, qrcode, created_at FROM workers"
-    params = ()
-    if q:
-        sql += " WHERE name ILIKE %s"
-        params = (f"%{q}%",)
-    sql += " ORDER BY id ASC;"
-
-    conn = get_db()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-
-    # Use your existing "workers.html" if present; otherwise render a basic list
-    template_path = os.path.join(app.root_path, "templates", "workers.html")
-    if os.path.exists(template_path):
-        return render_template("workers.html", workers=rows, query=q)
-
-    # Fallback minimal page
-    items = "".join(
-        f'<li>#{w["id"]} — {w["name"]} '
-        f'[<a href="/workers/{w["id"]}/print">print</a>] '
-        f'[<img src="/workers/{w["id"]}/qr.png" alt="qr" width="80">]</li>'
-        for w in rows
-    )
-    return f"""
-    <!doctype html><meta charset="utf-8">
-    <h1>Workers</h1>
-    <form><input name="q" placeholder="Search name" value="{q}"><button>Search</button></form>
-    <ul>{items or "<li><em>No workers yet.</em></li>"}</ul>
+def _normalize_token_or_name(payload: dict) -> Tuple[Optional[str], Optional[str]]:
     """
-
-@app.get("/workers/<int:wid>/qr.png")
-def worker_qr_png(wid: int):
-    """PNG QR for the worker — uses the worker id as payload by default."""
-    # Make sure the worker exists
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM workers WHERE id=%s;", (wid,))
-        if cur.fetchone() is None:
-            abort(404)
-
-    # If qrcode lib missing, return a 1x1 png
-    if not qrcode:
-        return send_file(
-            io.BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
-                       b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
-                       b"\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"),
-            mimetype="image/png",
-        )
-
-    # Build a simple QR payload; adjust to your real payload if needed.
-    payload = f"worker:{wid}"
-    img = qrcode.make(payload)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return send_file(buf, mimetype="image/png")
-
-@app.get("/workers/<int:wid>/print")
-def worker_print(wid: int):
-    """Printable view for one worker (uses print_qr.html)."""
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, name, qrcode FROM workers WHERE id=%s;", (wid,))
-        row = fetchone_dict(cur)
-    if not row:
-        abort(404)
-    # ✅ Use the template you actually have:
-    return render_template("print_qr.html", worker=row)
-
-# ------------------------------- Operations UI --------------------------------
-
-@app.get("/operations")
-def operations_page():
-    conn = get_db()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT id, name, created_at FROM operations ORDER BY id DESC;")
-        ops = cur.fetchall()
-
-    # Use existing template if available
-    template_path = os.path.join(app.root_path, "templates", "operations.html")
-    if os.path.exists(template_path):
-        return render_template("operations.html", operations=ops)
-
-    # Fallback minimal page with a form posting to /operations/add
-    rows = "".join(f"<li>#{o['id']} — {o['name']}</li>" for o in ops)
-    return f"""
-    <!doctype html><meta charset="utf-8">
-    <h1>Operations</h1>
-    <form method="post" action="/operations/add">
-      <input name="name" placeholder="Operation name" required>
-      <button type="submit">Add</button>
-    </form>
-    <ul>{rows or "<li><em>No operations yet.</em></li>"}</ul>
+    Returns (token_id, worker_name_guess)
+    Accepts new 'token_id' (may be 'W:XYZ') OR legacy 'worker_name'.
     """
+    token = (payload.get("token_id") or "").strip()
+    name  = (payload.get("worker_name") or "").strip()
+    if token.upper().startswith("W:"):
+        token = token[2:]
+    return (token or None), (name or None)
 
-@app.post("/operations/add")
-def operations_add():
-    """Fix for 404: handler now exists."""
-    name = (request.form.get("name") or "").strip()
-    if not name:
-        flash("Operation name required", "error")
-        return redirect(url_for("operations_page"))
+@app.post("/scan")
+def scan_unified():
+    """
+    Body:
+      {
+        secret: "...",
+        token_id: "W:ABC123" OR "ABC123"   # preferred
+        # or legacy:
+        worker_name: "ABC123" or actual name
 
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO operations (name) VALUES (%s) RETURNING id;", (name,))
-        op_id = cur.fetchone()[0]
+        # optional for saving a piece:
+        barcode: "B:..." or raw "...",
+      }
 
-    flash(f"Operation {op_id} created", "success")
-    return redirect(url_for("operations_page"))
+    Behavior:
+      - If worker not found by token, tries legacy name lookup.
+      - If 'barcode' present: store a piece.
+      - Otherwise: login check only (just returns today's totals).
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    if not _require_secret(payload):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
 
-# ------------------------- Stub pages (keep your own) --------------------------
+    token_id, name_guess = _normalize_token_or_name(payload)
+    barcode = (payload.get("barcode") or "").strip()
+    if barcode.upper().startswith("B:"):
+        barcode = barcode[2:]
 
-@app.get("/assign_operation")
-def assign_operation_page():
-    # If you have a template, it will be used. Otherwise a stub renders.
-    template_path = os.path.join(app.root_path, "templates", "assign_operation.html")
-    if os.path.exists(template_path):
-        return render_template("assign_operation.html")
-    return "<h1>Assign Operation</h1><p>Build your UI here.</p>"
+    # Find worker
+    with db_connect() as conn, conn.cursor() as cur:
+        worker_row = None
+        if token_id:
+            cur.execute("SELECT id, name, department FROM workers WHERE token_id=%s", (token_id,))
+            worker_row = cur.fetchone()
 
-@app.get("/reports")
-def reports_page():
-    template_path = os.path.join(app.root_path, "templates", "reports.html")
-    if os.path.exists(template_path):
-        return render_template("reports.html")
-    return "<h1>Reports</h1><p>Build your UI here.</p>"
+        # Legacy fallback: allow lookup by name
+        if not worker_row and name_guess:
+            # Try as token first (some devices sent token in worker_name previously)
+            cur.execute("SELECT id, name, department FROM workers WHERE token_id=%s", (name_guess,))
+            worker_row = cur.fetchone()
+            if not worker_row:
+                # Finally, try an exact name match
+                cur.execute("SELECT id, name, department FROM workers WHERE name=%s", (name_guess,))
+                worker_row = cur.fetchone()
 
-# ------------------------------------------------------------------------------
-# Gunicorn entrypoint
-# ------------------------------------------------------------------------------
+        if not worker_row:
+            return jsonify({"ok": False, "status": "error", "message": "Worker not found"}), 200
+
+        wid = worker_row["id"]
+
+        # If barcode present -> save a piece
+        if barcode:
+            cur.execute("INSERT INTO scans (worker_id, barcode) VALUES (%s,%s)", (wid, barcode or None))
+
+        # Compute today's totals
+        start, end = today_bounds_utc()
+        cur.execute("""
+            SELECT COUNT(*) AS cnt
+            FROM scans
+            WHERE worker_id=%s AND scanned_at >= %s AND scanned_at < %s
+        """, (wid, start, end))
+        cnt = (cur.fetchone() or {}).get("cnt", 0)
+
+    resp = {
+        "ok": True,
+        "status": "success",
+        "name": worker_row["name"],
+        "department": worker_row["department"],
+        "today_pieces": int(cnt),
+        "today_earn": round(float(cnt) * RATE_PER_PIECE, 2)
+    }
+    return jsonify(resp)
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # For local testing only; Render will run gunicorn.
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))

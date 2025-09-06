@@ -32,7 +32,6 @@
   <link rel="icon" href="data:image/svg+xml,\
   %3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Crect width='256' height='256' rx='48' fill='%2306b6d4'/%3E%3Cpath d='M60 160l68-96l68 96' fill='none' stroke='white' stroke-width='20' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='128' cy='164' r='12' fill='white'/%3E%3C/svg%3E" />
   <style>
-    /* slight niceties */
     .glass { backdrop-filter: blur(8px); background: rgba(255,255,255,0.6); }
     .dark .glass { background: rgba(17,24,39,0.6); }
   </style>
@@ -95,8 +94,13 @@
 
   <footer class="border-t border-slate-200 py-6 mt-10">
     <div class="max-w-7xl mx-auto px-4 md:px-6 text-xs text-slate-500">
-      © {{ now().year }} {{ brand }} · Rate ₹{{ "%.2f"|format(rate_per_piece) }} per piece
+      © <span id="year"></span> {{ brand }} · Rate ₹{{ "%.2f"|format((rate_per_piece|default(1.0))) }} per piece
     </div>
   </footer>
+
+  <script>
+    // Set current year without needing Jinja's now()
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
 </body>
 </html>

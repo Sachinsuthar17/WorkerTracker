@@ -3,7 +3,7 @@ import io
 import uuid
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from flask import (
     Flask, jsonify, render_template, request,
@@ -12,10 +12,9 @@ from flask import (
 from flask_cors import CORS
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
+from psycopg2 import errors as pg_errors
 
-# Optional QR libs (both are in your requirements)
-# We'll prefer segno (SVG/PNG, no PIL dependency).
-import segno
+import segno  # QR generation (PNG/SVG)
 
 # =========================
 # Config
@@ -29,6 +28,13 @@ if not DATABASE_URL:
 
 app = Flask(__name__)
 CORS(app)
+
+# A simple banner message mechanism using query params (?msg=...&err=1)
+def go(where: str, msg: str = "", err: bool = False):
+    if not msg:
+        return redirect(where)
+    sep = "&" if ("?" in where) else "?"
+    return redirect(f"{where}{sep}msg={msg}&err={'1' if err else '0'}")
 
 _pool: Optional[SimpleConnectionPool] = None
 _inited = False
@@ -45,15 +51,13 @@ def get_pool() -> SimpleConnectionPool:
 
 def ensure_schema(conn: psycopg2.extensions.connection) -> None:
     """
-    Idempotent, legacy-safe schema bootstrap.
-    Creates/patches:
-      - workers (id, name, department, token_id UNIQUE)
-      - scans   (id, worker_id, barcode, operation_code, created_at TIMESTAMPTZ)
-    Adds FK + indexes if missing.
+    Idempotent schema bootstrap (safe to re-run).
+      - workers(id, name, department, token_id UNIQUE)
+      - scans(id, worker_id, barcode, operation_code, created_at TIMESTAMPTZ)
     """
     cur = conn.cursor()
     try:
-        # --- workers (basic master)
+        # workers
         cur.execute("""
             CREATE TABLE IF NOT EXISTS workers (
                 id SERIAL PRIMARY KEY,
@@ -63,7 +67,7 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
             );
         """)
 
-        # --- scans (start minimal, expand safely)
+        # scans
         cur.execute("CREATE TABLE IF NOT EXISTS scans (id SERIAL PRIMARY KEY);")
 
         cur.execute("""
@@ -88,7 +92,7 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         END $$;
         """)
 
-        # Backfill from any legacy 'scanned_at'
+        # backfill legacy scanned_at
         cur.execute("""
         DO $$
         BEGIN
@@ -100,7 +104,7 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         END $$;
         """)
 
-        # FK only once
+        # FK once
         cur.execute("""
         DO $$
         DECLARE fk_exists BOOLEAN;
@@ -117,7 +121,7 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         END $$;
         """)
 
-        # Indexes
+        # indexes
         cur.execute("""
         DO $$
         BEGIN
@@ -139,7 +143,6 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
 
 
 def init_once() -> None:
-    """Run schema bootstrap exactly once per process."""
     global _inited
     if _inited:
         return
@@ -160,7 +163,7 @@ def _guard_init():
     init_once()
 
 
-def today_bounds_utc():
+def today_bounds_utc() -> Tuple[datetime, datetime]:
     now = datetime.now(timezone.utc)
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     end = datetime(now.year, now.month, now.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
@@ -177,15 +180,20 @@ def dashboard():
 @app.route("/workers", methods=["GET"])
 def workers_page():
     """
-    List workers + inline "Add Worker" form.
+    List workers + Add Worker form.
+    Optional banner via ?msg=&err=0/1
     """
+    msg = (request.args.get("msg") or "").strip()
+    err = (request.args.get("err") or "0") == "1"
+
     pool = get_pool()
     conn = pool.getconn()
     try:
         cur = conn.cursor()
         try:
             cur.execute("""
-                SELECT id, COALESCE(NULLIF(name,''),'(no name)') AS name,
+                SELECT id,
+                       COALESCE(NULLIF(name,''),'(no name)') AS name,
                        COALESCE(NULLIF(department,''),'') AS department,
                        COALESCE(NULLIF(token_id,''),'') AS token_id
                   FROM workers
@@ -199,7 +207,55 @@ def workers_page():
             cur.close()
     finally:
         pool.putconn(conn)
-    return render_template("workers.html", rate_per_piece=RATE_PER_PIECE, workers=workers)
+
+    return render_template(
+        "workers.html",
+        rate_per_piece=RATE_PER_PIECE,
+        workers=workers,
+        banner_msg=msg,
+        banner_err=err
+    )
+
+@app.route("/workers/<int:worker_id>/edit", methods=["GET"])
+def workers_edit_page(worker_id: int):
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, name, department, token_id FROM workers WHERE id=%s;", (worker_id,))
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    finally:
+        pool.putconn(conn)
+
+    if not row:
+        return go(url_for("workers_page"), "Worker not found", True)
+
+    worker = {"id": row[0], "name": row[1] or "", "department": row[2] or "", "token_id": row[3] or ""}
+    return render_template("workers_edit.html", worker=worker, rate_per_piece=RATE_PER_PIECE)
+
+@app.route("/workers/<int:worker_id>/print", methods=["GET"])
+def workers_print(worker_id: int):
+    """Print-friendly page with QR + details."""
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, name, department, token_id FROM workers WHERE id=%s;", (worker_id,))
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    finally:
+        pool.putconn(conn)
+
+    if not row:
+        abort(404)
+
+    worker = {"id": row[0], "name": row[1] or "", "department": row[2] or "", "token_id": row[3] or ""}
+    return render_template("print_qr.html", worker=worker, rate_per_piece=RATE_PER_PIECE)
 
 @app.route("/operations")
 def operations_page():
@@ -211,7 +267,6 @@ def reports_page():
 
 @app.route("/settings")
 def settings_page():
-    # Render with explicit rate to avoid "undefined" issues in template
     return render_template("settings.html", rate_per_piece=RATE_PER_PIECE)
 
 @app.route("/assign_operation")
@@ -220,21 +275,29 @@ def assign_operation_page():
 
 
 # =========================
-# Worker Management (New)
+# Worker CRUD
 # =========================
 def _new_token() -> str:
-    # short stable token: first 12 hex chars of uuid4
     return uuid.uuid4().hex[:12].upper()
+
+def _clean_token(raw: str) -> str:
+    if not raw:
+        return ""
+    t = raw.strip().upper()
+    if t.startswith("W:"):
+        t = t[2:]
+    return t
 
 @app.route("/workers/add", methods=["POST"])
 def workers_add():
     """
-    Create a worker with a fresh unique token_id.
-    Form fields: name, department (both optional but recommended).
+    Add worker. Fields: name, department, token (optional).
+    If token blank -> auto-generate.
     """
     name = (request.form.get("name") or "").strip()
     department = (request.form.get("department") or "").strip()
-    token_id = _new_token()
+    manual_token = _clean_token(request.form.get("token") or "")
+    token_id = manual_token or _new_token()
 
     pool = get_pool()
     conn = pool.getconn()
@@ -247,19 +310,80 @@ def workers_add():
                 RETURNING id;
             """, (name, department, token_id))
             worker_id = cur.fetchone()[0]
+        except pg_errors.UniqueViolation:
+            conn.rollback()
+            return go(url_for("workers_page"), "Token already exists. Please use another.", True)
         finally:
             cur.close()
         conn.commit()
     finally:
         pool.putconn(conn)
 
-    return redirect(url_for("workers_page") + f"#w{worker_id}")
+    return go(url_for("workers_page") + f"#w{worker_id}", "Worker added")
 
+@app.route("/workers/<int:worker_id>/edit", methods=["POST"])
+def workers_edit(worker_id: int):
+    """
+    Update name, department, token_id (manual override).
+    """
+    name = (request.form.get("name") or "").strip()
+    department = (request.form.get("department") or "").strip()
+    token_id = _clean_token(request.form.get("token") or "")
+
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        try:
+            # Ensure exists
+            cur.execute("SELECT id FROM workers WHERE id=%s;", (worker_id,))
+            if not cur.fetchone():
+                return go(url_for("workers_page"), "Worker not found", True)
+
+            cur.execute("""
+                UPDATE workers
+                   SET name=%s, department=%s, token_id = NULLIF(%s,'')
+                 WHERE id=%s;
+            """, (name, department, token_id, worker_id))
+        except pg_errors.UniqueViolation:
+            conn.rollback()
+            return go(url_for("workers_edit_page", worker_id=worker_id), "Token already in use by another worker.", True)
+        finally:
+            cur.close()
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    return go(url_for("workers_page") + f"#w{worker_id}", "Worker updated")
+
+@app.route("/workers/<int:worker_id>/delete", methods=["POST"])
+def workers_delete(worker_id: int):
+    """
+    Delete worker (and cascade delete their scans).
+    """
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM workers WHERE id=%s;", (worker_id,))
+            deleted = cur.rowcount
+        finally:
+            cur.close()
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    if deleted:
+        return go(url_for("workers_page"), "Worker deleted")
+    return go(url_for("workers_page"), "Worker not found", True)
+
+
+# =========================
+# QR endpoints
+# =========================
 @app.route("/workers/<int:worker_id>/qr.png")
 def worker_qr_png(worker_id: int):
-    """
-    Serve a PNG QR code for "W:<token>" (used by the ESP32 to login).
-    """
     pool = get_pool()
     conn = pool.getconn()
     try:
@@ -277,16 +401,12 @@ def worker_qr_png(worker_id: int):
 
     qr = segno.make(f"W:{row[0]}")
     buf = io.BytesIO()
-    # quiet_zone=2 keeps codes compact but still scannable
-    qr.save(buf, kind="png", scale=6, border=2)  # scale ~ size, border ~ quiet zone
+    qr.save(buf, kind="png", scale=6, border=2)
     buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name=f"worker_{worker_id}.png")
 
 @app.route("/workers/<int:worker_id>/qr.svg")
 def worker_qr_svg(worker_id: int):
-    """
-    Serve an SVG QR code (vector).
-    """
     pool = get_pool()
     conn = pool.getconn()
     try:
@@ -308,34 +428,9 @@ def worker_qr_svg(worker_id: int):
     buf.seek(0)
     return send_file(buf, mimetype="image/svg+xml", download_name=f"worker_{worker_id}.svg")
 
-@app.route("/api/workers")
-def api_workers():
-    """
-    JSON list of workers (useful for any future front-end).
-    """
-    pool = get_pool()
-    conn = pool.getconn()
-    try:
-        cur = conn.cursor()
-        try:
-            cur.execute("""
-                SELECT id, name, department, token_id
-                  FROM workers
-                 ORDER BY id DESC;
-            """)
-            data = [
-                {"id": rid, "name": nm or "", "department": dp or "", "token_id": tk or ""}
-                for (rid, nm, dp, tk) in cur.fetchall()
-            ]
-        finally:
-            cur.close()
-    finally:
-        pool.putconn(conn)
-    return jsonify(data)
-
 
 # =========================
-# Dashboard / Activities APIs (unchanged behavior)
+# APIs for dashboard (unchanged)
 # =========================
 def _normalize_worker_token(raw: str) -> str:
     raw = (raw or "").strip()
@@ -448,7 +543,7 @@ def api_activities():
 
 
 # =========================
-# Device endpoints (match ESP32 sketch)
+# Device endpoints (ESP32)
 # =========================
 @app.route("/scan", methods=["POST"])
 def scan_login_or_ping():
@@ -512,7 +607,7 @@ def scan_operation():
         try:
             worker_id = _lookup_or_create_worker_by_token(cur, token_raw)
 
-            # Try to parse operation code from barcode (e.g., "B:OP10-XYZ" -> "OP10")
+            # simple OP parse
             op_code = ""
             try:
                 b = barcode[2:] if barcode.startswith("B:") else barcode
@@ -542,8 +637,7 @@ def scan_operation():
 @app.route("/logout", methods=["POST"])
 def logout():
     """
-    ESP32 logs out locally when the same card is scanned again.
-    No-op here: just return success for device compatibility.
+    Device handles local session; server returns success for compatibility.
     """
     payload = request.get_json(silent=True) or {}
     if (payload.get("secret") or "").strip() != DEVICE_SECRET:
@@ -556,7 +650,6 @@ def logout():
 # =========================
 @app.context_processor
 def inject_globals():
-    # Avoid using jinja `now()` filter (not always available); inject year here if you need it in templates.
     return dict(
         app_name="Banswara Scanner",
         brand="Banswara Scanner",

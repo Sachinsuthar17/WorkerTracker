@@ -1,67 +1,60 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>PRO X – Production</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/modern-css-reset/dist/reset.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
+  <meta charset="utf-8"/>
+  <title>Piece Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="icon" href="data:,">
   <style>
-    :root{--bg:#0f172a;--card:#111827;--muted:#94a3b8;--text:#e5e7eb;--brand:#22d3ee;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;}
-    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
-    .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;}
-    .sidebar{background:#0b1220;border-right:1px solid #1f2937;padding:20px}
-    .brand{display:flex;gap:8px;align-items:center;font-weight:700;margin-bottom:20px;color:var(--brand)}
-    .menu{display:flex;flex-direction:column;gap:8px}
-    .menu a{color:var(--text);text-decoration:none;padding:10px 12px;border-radius:8px;display:flex;gap:10px;align-items:center}
-    .menu a.active,.menu a:hover{background:#1f2937}
-    main{padding:24px 28px}
-    .page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-    .live-indicator{display:inline-flex;align-items:center;gap:8px;color:#22c55e;font-weight:600}
-    .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e}
-    .stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-    .stat{background:var(--card);border:1px solid #1f2937;border-radius:12px;padding:14px}
-    .stat h4{font-size:12px;color:var(--muted);margin:0 0 8px}
-    .stat .v{font-size:22px;font-weight:700}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
-    .card{background:var(--card);border:1px solid #1f2937;border-radius:12px;padding:14px}
-    .card h3{margin:0 0 10px}
-    .activities{display:flex;flex-direction:column;gap:10px;max-height:420px;overflow:auto}
-    .activity{display:grid;grid-template-columns:120px 1fr 110px 120px 90px;gap:8px;padding:10px;border:1px solid #1f2937;border-radius:10px;background:#0f1627}
-    .muted{color:var(--muted)}
-    input,select,button{background:#0f1627;border:1px solid #334155;border-radius:8px;color:var(--text);padding:10px 12px;font:inherit}
-    button{cursor:pointer}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:8px;border-bottom:1px solid #1f2937;text-align:left}
-    @media (max-width:1000px){
-      .app{grid-template-columns:1fr}
-      .sidebar{display:none}
-      .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-      .grid{grid-template-columns:1fr}
-      .activity{grid-template-columns:100px 1fr}
+    :root {
+      --bg:#0b1220; --panel:#121a2b; --muted:#7c8aa5; --text:#e6edf6; --accent:#32d4ff; --ok:#1f9d5a; --warn:#f5a524;
+      --danger:#ff5d5d; --border:#22304a;
     }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", sans-serif; color:var(--text); background:linear-gradient(180deg,#0b1220,#0a0f1b 40%, #070c15); }
+    a { color: var(--accent); text-decoration: none; }
+    .shell { display:grid; grid-template-columns: 240px 1fr; min-height:100vh; }
+    .sidebar { background:var(--panel); border-right:1px solid var(--border); padding:18px; position:sticky; top:0; height:100vh; }
+    .brand { font-weight:700; letter-spacing:.3px; display:flex; align-items:center; gap:10px; }
+    .brand-dot { width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); }
+    nav { margin-top:18px; display:flex; flex-direction:column; gap:6px; }
+    .menu-link { display:block; padding:10px 12px; border-radius:10px; color:var(--text); border:1px solid transparent; }
+    .menu-link:hover { background:#0c1528; border-color:var(--border); }
+    .content { padding:22px; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; }
+    .muted { color:var(--muted); }
+    .btn { background:var(--accent); color:#00131a; border:0; padding:9px 12px; border-radius:10px; font-weight:600; cursor:pointer; }
+    .btn.secondary { background:#0f233b; color:var(--text); border:1px solid var(--border); }
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding:10px 8px; border-bottom:1px solid var(--border); }
+    th { text-align:left; color:#aab7d1; font-weight:600; }
+    .grid { display:grid; gap:16px; }
+    @media (min-width: 900px){ .grid.cols-3 { grid-template-columns: repeat(3, 1fr); } .grid.cols-2 { grid-template-columns: repeat(2, 1fr);} }
+    .kpi { font-size:30px; font-weight:800; letter-spacing:.2px; }
+    .pill { display:inline-flex; gap:8px; align-items:center; background:#0e1d33; border:1px solid var(--border); padding:6px 10px; border-radius:999px; color:var(--muted); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    input, select { background:#0c1528; border:1px solid var(--border); color:var(--text); border-radius:10px; padding:9px 10px; }
+    .right { text-align:right; }
+    .live-dot { width:8px; height:8px; border-radius:50%; background:#2bd576; box-shadow:0 0 6px #2bd576; display:inline-block; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <div class="app">
+  <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><i class="fa-solid fa-bolt"></i> PRO X</div>
-      <nav class="menu">
-        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint=='dashboard' %}active{% endif %}">
-          <i class="fa-solid fa-gauge"></i> Dashboard
-        </a>
-        <a href="{{ url_for('workers') }}" class="{% if request.endpoint=='workers' %}active{% endif %}">
-          <i class="fa-solid fa-users"></i> Workers
-        </a>
-        <!-- the following pages are placeholders only (no Flask routes in app.py):
-             operations.html, reports.html, settings.html, assign_operation.html -->
+      <div class="brand"><span class="brand-dot"></span> Piece Tracker</div>
+      <nav>
+        <a href="{{ url_for('dashboard') }}" class="menu-link">Dashboard</a>
+        <a href="{{ url_for('production') }}" class="menu-link">Production</a>
+        <a href="{{ url_for('workers') }}" class="menu-link">Workers</a>
+        <a href="{{ url_for('operations_page') }}" class="menu-link">Operations</a>
+        <a href="{{ url_for('assign_operations') }}" class="menu-link">Assign Ops</a>
+        <a href="{{ url_for('reports') }}" class="menu-link">Reports</a>
+        <a href="{{ url_for('settings') }}" class="menu-link">Settings</a>
       </nav>
     </aside>
-    <main>
+    <main class="content">
       {% block content %}{% endblock %}
     </main>
   </div>

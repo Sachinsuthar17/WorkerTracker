@@ -1,5 +1,6 @@
 import os
-from datetime import datetime, timezone, date
+import threading
+from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 import psycopg2
@@ -9,54 +10,53 @@ from psycopg2.pool import SimpleConnectionPool
 # Config
 # -------------------------
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
-DATABASE_URL  = os.getenv("DATABASE_URL")
-RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.0"))  # used for 'earnings'
+DATABASE_URL  = os.getenv("DATABASE_URL")  # Render Postgres URL
+RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.0"))  # INR earned per piece
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is required (Render Postgres connection string)")
+    raise RuntimeError("DATABASE_URL is required")
 
 app = Flask(__name__)
 CORS(app)
 
-_pool = None
+_pool: SimpleConnectionPool | None = None
 _inited = False
+_init_lock = threading.Lock()
 
 
 def get_pool() -> SimpleConnectionPool:
     global _pool
     if _pool is None:
-        _pool = SimpleConnectionPool(
-            1, 10, dsn=DATABASE_URL, sslmode="require"
-        )
+        _pool = SimpleConnectionPool(1, 12, dsn=DATABASE_URL, sslmode="require")
     return _pool
 
 
-def ensure_schema(conn):
+def ensure_schema(conn: psycopg2.extensions.connection) -> None:
     """
-    Create/upgrade schema safely.
-    Compatible with legacy tables that may have 'scanned_at' instead of 'created_at'.
+    Create/upgrade schema safely. No nested 'with conn:' here.
     """
-    with conn, conn.cursor() as cur:
+    cur = conn.cursor()
+    try:
         # workers
         cur.execute("""
-        CREATE TABLE IF NOT EXISTS workers (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            department TEXT DEFAULT ''
-        );
+            CREATE TABLE IF NOT EXISTS workers (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                department TEXT DEFAULT ''
+            );
         """)
 
-        # scans (use minimal, generic columns; server unifies all scan types)
+        # scans (generic)
         cur.execute("""
-        CREATE TABLE IF NOT EXISTS scans (
-            id SERIAL PRIMARY KEY,
-            worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-            barcode TEXT,
-            operation_code TEXT
-        );
+            CREATE TABLE IF NOT EXISTS scans (
+                id SERIAL PRIMARY KEY,
+                worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+                barcode TEXT,
+                operation_code TEXT
+            );
         """)
 
-        # Add created_at if missing
+        # created_at column (add if missing)
         cur.execute("""
         DO $$
         BEGIN
@@ -70,7 +70,7 @@ def ensure_schema(conn):
         $$;
         """)
 
-        # If legacy 'scanned_at' exists, backfill created_at from it
+        # Backfill from legacy scanned_at if present
         cur.execute("""
         DO $$
         BEGIN
@@ -89,30 +89,34 @@ def ensure_schema(conn):
         # Indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans (worker_id, created_at DESC);")
+    finally:
+        cur.close()
+    conn.commit()
 
 
-def init_once():
+def init_once() -> None:
     global _inited
     if _inited:
         return
-    pool = get_pool()
-    with pool.getconn() as conn:
+    with _init_lock:
+        if _inited:
+            return
+        pool = get_pool()
+        conn = pool.getconn()
         try:
             ensure_schema(conn)
+            _inited = True
         finally:
             pool.putconn(conn)
-    _inited = True
 
 
 @app.before_request
 def _guard_init():
-    # Flask 2/3 compatible: ensure we init once before handling requests
+    # Make sure schema exists before handling any request
     init_once()
 
 
 def today_bounds_utc():
-    """Return (start, end) of 'today' in UTC for simple daily rollups."""
-    # You can replace with local timezone if you prefer.
     now = datetime.now(timezone.utc)
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     end = datetime(now.year, now.month, now.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
@@ -154,149 +158,147 @@ def assign_operation_page():
 def api_stats():
     pool = get_pool()
     start, end = today_bounds_utc()
-    with pool.getconn() as conn:
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
         try:
-            with conn.cursor() as cur:
-                # total workers
-                cur.execute("SELECT COUNT(*) FROM workers;")
-                total_workers = cur.fetchone()[0]
+            # total workers
+            cur.execute("SELECT COUNT(*) FROM workers;")
+            total_workers = cur.fetchone()[0]
 
-                # active today (distinct workers who scanned today)
-                cur.execute("""
-                    SELECT COUNT(DISTINCT s.worker_id)
-                      FROM scans s
-                     WHERE COALESCE(s.created_at, NOW()) >= %s
-                       AND COALESCE(s.created_at, NOW()) <= %s;
-                """, (start, end))
-                active_today = cur.fetchone()[0]
+            # active today
+            cur.execute("""
+                SELECT COUNT(DISTINCT worker_id)
+                  FROM scans
+                 WHERE created_at >= %s AND created_at <= %s;
+            """, (start, end))
+            active_today = cur.fetchone()[0]
 
-                # scans today
-                cur.execute("""
-                    SELECT COUNT(*)
-                      FROM scans s
-                     WHERE COALESCE(s.created_at, NOW()) >= %s
-                       AND COALESCE(s.created_at, NOW()) <= %s;
-                """, (start, end))
-                scans_today = cur.fetchone()[0]
-
-                return jsonify({
-                    "total_workers": total_workers,
-                    "active_today": active_today,
-                    "scans_today": scans_today
-                })
+            # scans today
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM scans
+                 WHERE created_at >= %s AND created_at <= %s;
+            """, (start, end))
+            scans_today = cur.fetchone()[0]
         finally:
-            pool.putconn(conn)
+            cur.close()
+        return jsonify({
+            "total_workers": total_workers,
+            "active_today": active_today,
+            "scans_today": scans_today
+        })
+    finally:
+        pool.putconn(conn)
 
 
 @app.route("/api/activities")
 def api_activities():
-    """
-    Recent activity feed for dashboard.
-    No 'bundle_id' anywhere. Only workers + scans.
-    """
     pool = get_pool()
-    with pool.getconn() as conn:
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT
-                        COALESCE(s.created_at, NOW()) AS ts,
-                        w.name        AS worker,
-                        NULLIF(w.department, '') AS line,
-                        s.operation_code,
-                        s.barcode
-                    FROM scans s
-                    JOIN workers w ON w.id = s.worker_id
-                    ORDER BY COALESCE(s.created_at, NOW()) DESC
-                    LIMIT 100;
-                """)
-                rows = cur.fetchall()
-                data = []
-                for ts, worker, line, op, bc in rows:
-                    data.append({
-                        "ts": ts.isoformat(),
-                        "worker": worker,
-                        "line": line or "",
-                        "operation_code": op or "",
-                        "barcode": bc or ""
-                    })
-                return jsonify(data)
+            cur.execute("""
+                SELECT
+                    s.created_at AS ts,
+                    w.name       AS worker,
+                    NULLIF(w.department,'') AS line,
+                    s.operation_code,
+                    s.barcode
+                FROM scans s
+                JOIN workers w ON w.id = s.worker_id
+                ORDER BY s.created_at DESC
+                LIMIT 100;
+            """)
+            rows = cur.fetchall()
+            data = []
+            for ts, worker, line, op, bc in rows:
+                data.append({
+                    "ts": ts.isoformat(),
+                    "worker": worker,
+                    "line": line or "",
+                    "operation_code": op or "",
+                    "barcode": bc or ""
+                })
         finally:
-            pool.putconn(conn)
+            cur.close()
+        return jsonify(data)
+    finally:
+        pool.putconn(conn)
 
 
 # -------------------------
-# Unified device endpoint
+# Unified device endpoint (matches your ESP32 sketch)
 # -------------------------
 @app.route("/scan", methods=["POST"])
 def scan():
     """
-    ESP32 posts JSON: {
-      "secret": "...",
+    ESP32 JSON body:
+    {
+      "secret": "<DEVICE_SECRET>",
       "worker_name": "Sachin",
-      "barcode": "B123"          # optional
-      # "operation_code": "OP10" # optional
+      "barcode": "B:XYZ123",       # optional
+      "operation_code": "OP10"     # optional
     }
-    - If only worker_name is present -> treat as login/refresh.
-    - If barcode/operation_code present -> record a piece, then return today's rollup.
     """
     payload = request.get_json(silent=True) or {}
-    secret = payload.get("secret", "")
+    secret = (payload.get("secret") or "").strip()
     worker_name = (payload.get("worker_name") or "").strip()
     barcode = (payload.get("barcode") or "").strip()
     operation_code = (payload.get("operation_code") or "").strip()
 
     if secret != DEVICE_SECRET:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-
     if not worker_name:
         return jsonify({"ok": False, "error": "worker_name required"}), 400
 
-    pool = get_pool()
     start, end = today_bounds_utc()
-    with pool.getconn() as conn:
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
         try:
-            with conn:
-                with conn.cursor() as cur:
-                    # upsert worker
-                    cur.execute("""
-                        INSERT INTO workers (name)
-                        VALUES (%s)
-                        ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
-                        RETURNING id;
-                    """, (worker_name,))
-                    worker_id = cur.fetchone()[0]
+            # upsert worker
+            cur.execute("""
+                INSERT INTO workers (name)
+                VALUES (%s)
+                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                RETURNING id;
+            """, (worker_name,))
+            worker_id = cur.fetchone()[0]
 
-                    # if there is something to record, insert a scan row
-                    if barcode or operation_code:
-                        cur.execute("""
-                            INSERT INTO scans (worker_id, barcode, operation_code, created_at)
-                            VALUES (%s, NULLIF(%s, ''), NULLIF(%s, ''), NOW());
-                        """, (worker_id, barcode, operation_code))
+            # record a scan if barcode/operation provided
+            if barcode or operation_code:
+                cur.execute("""
+                    INSERT INTO scans (worker_id, barcode, operation_code, created_at)
+                    VALUES (%s, NULLIF(%s,''), NULLIF(%s,''), NOW());
+                """, (worker_id, barcode, operation_code))
 
-                    # roll up today's totals for this worker
-                    cur.execute("""
-                        SELECT COUNT(*)
-                          FROM scans
-                         WHERE worker_id = %s
-                           AND COALESCE(created_at, NOW()) >= %s
-                           AND COALESCE(created_at, NOW()) <= %s;
-                    """, (worker_id, start, end))
-                    today_pieces = cur.fetchone()[0]
-                    today_earn = today_pieces * RATE_PER_PIECE
-
-            # return response
-            return jsonify({
-                "ok": True,
-                "today_pieces": today_pieces,
-                "today_earn": today_earn
-            })
+            # today's totals for this worker
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM scans
+                 WHERE worker_id = %s
+                   AND created_at >= %s
+                   AND created_at <= %s;
+            """, (worker_id, start, end))
+            today_pieces = cur.fetchone()[0]
         finally:
-            pool.putconn(conn)
+            cur.close()
+
+        conn.commit()
+        return jsonify({
+            "ok": True,
+            "today_pieces": today_pieces,
+            "today_earn": today_pieces * RATE_PER_PIECE
+        })
+    finally:
+        pool.putconn(conn)
 
 
 # -------------------------
-# Jinja (Render templates live from /templates)
+# Jinja globals
 # -------------------------
 @app.context_processor
 def inject_globals():
@@ -304,5 +306,4 @@ def inject_globals():
 
 
 if __name__ == "__main__":
-    # Local run (Render runs via Gunicorn)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)

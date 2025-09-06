@@ -1,48 +1,36 @@
 {% extends "layout.html" %}
 {% block content %}
-<header class="page-header">
-  <h1>Workers</h1>
-</header>
+<header class="page-header"><h1>Workers</h1></header>
 
-<section class="card">
-  <h3>Add Worker</h3>
-  <form method="POST" action="{{ url_for('add_worker') }}" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px">
-    <input type="text" name="name" placeholder="Name" required>
-    <input type="text" name="department" placeholder="Department / Line">
-    <input type="text" name="token_id" placeholder="Token (printed on card)" required>
-    <button type="submit">Save</button>
+<div class="card">
+  <form id="f-add" class="row" onsubmit="return false;">
+    <input name="name" placeholder="Worker name" required>
+    <input name="department" placeholder="Department / Line">
+    <button class="btn">Add</button>
   </form>
-</section>
+</div>
+<div style="height:12px;"></div>
 
-<section class="card" style="margin-top:16px">
-  <h3>All Workers</h3>
-  <div style="overflow:auto;margin-top:8px">
+<div class="card">
+  <div class="muted">All workers</div>
+  <div style="height:8px;"></div>
+  <div style="overflow:auto;">
     <table>
-      <thead>
-        <tr class="muted">
-          <th>ID</th>
-          <th>Name</th>
-          <th>Dept</th>
-          <th>Token</th>
-          <th>Logged In</th>
-          <th>Last Login</th>
-          <th>QR</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Name</th><th>Department</th></tr></thead>
       <tbody>
         {% for w in workers %}
-        <tr>
-          <td>{{ w[0] }}</td>
-          <td>{{ w[1] }}</td>
-          <td>{{ w[2] or '' }}</td>
-          <td>{{ w[3] }}</td>
-          <td>{{ 'Yes' if w[5] else 'No' }}</td>
-          <td>{{ w[6] or '' }}</td>
-          <td><a target="_blank" href="{{ url_for('worker_qr', token_id=w[3]) }}">Worker QR</a></td>
-        </tr>
+        <tr><td>{{ w.name }}</td><td>{{ w.department or "" }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-</section>
+</div>
+
+<script>
+  document.querySelector("#f-add").addEventListener("submit", async (e)=>{
+    const fd = new FormData(e.target);
+    const r = await fetch("/workers/add", {method:"POST", body:fd});
+    if(r.ok){ location.reload(); } else { alert(await r.text()); }
+  });
+</script>
 {% endblock %}

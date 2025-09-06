@@ -6,12 +6,12 @@ from flask_cors import CORS
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 
-# -------------------------
+# =========================
 # Config
-# -------------------------
+# =========================
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
 DATABASE_URL  = os.getenv("DATABASE_URL")  # Render Postgres URL
-RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.0"))  # INR earned per piece
+RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.0"))  # INR per piece
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -33,11 +33,16 @@ def get_pool() -> SimpleConnectionPool:
 
 def ensure_schema(conn: psycopg2.extensions.connection) -> None:
     """
-    Create/upgrade schema safely. No nested 'with conn:' here.
+    Idempotent, legacy-safe schema bootstrap.
+    It:
+      - Creates workers/scans tables if missing
+      - Adds missing columns (worker_id, barcode, operation_code, created_at)
+      - Adds FK only if worker_id exists
+      - Creates indexes only when required columns exist
     """
     cur = conn.cursor()
     try:
-        # workers
+        # ---- workers table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS workers (
                 id SERIAL PRIMARY KEY,
@@ -46,23 +51,63 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
             );
         """)
 
-        # scans (generic)
+        # ---- scans table (create minimal if missing)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS scans (
-                id SERIAL PRIMARY KEY,
-                worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-                barcode TEXT,
-                operation_code TEXT
+                id SERIAL PRIMARY KEY
             );
         """)
 
-        # created_at column (add if missing)
+        # ---- add missing columns to scans
+        # worker_id
         cur.execute("""
         DO $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM information_schema.columns
-                WHERE table_name='scans' AND column_name='created_at'
+                 WHERE table_name='scans' AND column_name='worker_id'
+            ) THEN
+                ALTER TABLE scans ADD COLUMN worker_id INTEGER;
+            END IF;
+        END
+        $$;
+        """)
+
+        # barcode
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='barcode'
+            ) THEN
+                ALTER TABLE scans ADD COLUMN barcode TEXT;
+            END IF;
+        END
+        $$;
+        """)
+
+        # operation_code
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='operation_code'
+            ) THEN
+                ALTER TABLE scans ADD COLUMN operation_code TEXT;
+            END IF;
+        END
+        $$;
+        """)
+
+        # created_at with default
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='created_at'
             ) THEN
                 ALTER TABLE scans ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();
             END IF;
@@ -70,13 +115,13 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         $$;
         """)
 
-        # Backfill from legacy scanned_at if present
+        # If a legacy column 'scanned_at' exists, use it to backfill created_at where null
         cur.execute("""
         DO $$
         BEGIN
             IF EXISTS (
                 SELECT 1 FROM information_schema.columns
-                WHERE table_name='scans' AND column_name='scanned_at'
+                 WHERE table_name='scans' AND column_name='scanned_at'
             ) THEN
                 UPDATE scans
                    SET created_at = COALESCE(created_at, scanned_at)
@@ -86,9 +131,66 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         $$;
         """)
 
-        # Indexes
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans (worker_id, created_at DESC);")
+        # ---- add FK only if not present and both tables/column exist
+        cur.execute("""
+        DO $$
+        DECLARE
+            fk_exists BOOLEAN;
+            col_exists BOOLEAN;
+        BEGIN
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='worker_id'
+            ) INTO col_exists;
+
+            SELECT EXISTS (
+                SELECT 1 FROM pg_constraint
+                 WHERE conname = 'scans_worker_id_fkey'
+            ) INTO fk_exists;
+
+            IF col_exists AND NOT fk_exists THEN
+                -- Make sure any orphan values don't block FK add
+                -- (You can delete/clean later if needed.)
+                ALTER TABLE scans
+                ADD CONSTRAINT scans_worker_id_fkey
+                FOREIGN KEY (worker_id) REFERENCES workers(id)
+                ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+            END IF;
+        END
+        $$;
+        """)
+
+        # ---- indexes (only when columns exist)
+        # created_at index
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='created_at'
+            ) THEN
+                EXECUTE 'CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC)';
+            END IF;
+        END
+        $$;
+        """)
+
+        # (worker_id, created_at) index
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='worker_id'
+            ) AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name='scans' AND column_name='created_at'
+            ) THEN
+                EXECUTE 'CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans (worker_id, created_at DESC)';
+            END IF;
+        END
+        $$;
+        """)
     finally:
         cur.close()
     conn.commit()
@@ -112,7 +214,6 @@ def init_once() -> None:
 
 @app.before_request
 def _guard_init():
-    # Make sure schema exists before handling any request
     init_once()
 
 
@@ -123,9 +224,9 @@ def today_bounds_utc():
     return start, end
 
 
-# -------------------------
+# =========================
 # Pages
-# -------------------------
+# =========================
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
@@ -151,9 +252,9 @@ def assign_operation_page():
     return render_template("assign_operation.html")
 
 
-# -------------------------
-# APIs for dashboard widgets
-# -------------------------
+# =========================
+# API: Dashboard data
+# =========================
 @app.route("/api/stats")
 def api_stats():
     pool = get_pool()
@@ -162,19 +263,17 @@ def api_stats():
     try:
         cur = conn.cursor()
         try:
-            # total workers
             cur.execute("SELECT COUNT(*) FROM workers;")
             total_workers = cur.fetchone()[0]
 
-            # active today
             cur.execute("""
                 SELECT COUNT(DISTINCT worker_id)
                   FROM scans
-                 WHERE created_at >= %s AND created_at <= %s;
+                 WHERE created_at >= %s AND created_at <= %s
+                   AND worker_id IS NOT NULL;
             """, (start, end))
             active_today = cur.fetchone()[0]
 
-            # scans today
             cur.execute("""
                 SELECT COUNT(*)
                   FROM scans
@@ -202,20 +301,21 @@ def api_activities():
             cur.execute("""
                 SELECT
                     s.created_at AS ts,
-                    w.name       AS worker,
+                    COALESCE(w.name, '(unknown)') AS worker,
                     NULLIF(w.department,'') AS line,
                     s.operation_code,
                     s.barcode
                 FROM scans s
-                JOIN workers w ON w.id = s.worker_id
-                ORDER BY s.created_at DESC
+                LEFT JOIN workers w ON w.id = s.worker_id
+                ORDER BY s.created_at DESC NULLS LAST
                 LIMIT 100;
             """)
             rows = cur.fetchall()
             data = []
             for ts, worker, line, op, bc in rows:
+                ts_iso = ts.isoformat() if ts else None
                 data.append({
-                    "ts": ts.isoformat(),
+                    "ts": ts_iso,
                     "worker": worker,
                     "line": line or "",
                     "operation_code": op or "",
@@ -228,18 +328,20 @@ def api_activities():
         pool.putconn(conn)
 
 
-# -------------------------
-# Unified device endpoint (matches your ESP32 sketch)
-# -------------------------
+# =========================
+# Unified device endpoint
+# (aligns with the revised ESP32 sketch I gave you:
+#   sends secret + worker_name + optional barcode/operation_code)
+# =========================
 @app.route("/scan", methods=["POST"])
 def scan():
     """
-    ESP32 JSON body:
+    JSON body:
     {
       "secret": "<DEVICE_SECRET>",
       "worker_name": "Sachin",
-      "barcode": "B:XYZ123",       # optional
-      "operation_code": "OP10"     # optional
+      "barcode": "B:XYZ123",         # optional
+      "operation_code": "OP10"       # optional
     }
     """
     payload = request.get_json(silent=True) or {}
@@ -268,20 +370,19 @@ def scan():
             """, (worker_name,))
             worker_id = cur.fetchone()[0]
 
-            # record a scan if barcode/operation provided
+            # record a scan if any detail provided
             if barcode or operation_code:
                 cur.execute("""
                     INSERT INTO scans (worker_id, barcode, operation_code, created_at)
                     VALUES (%s, NULLIF(%s,''), NULLIF(%s,''), NOW());
                 """, (worker_id, barcode, operation_code))
 
-            # today's totals for this worker
+            # today's totals
             cur.execute("""
                 SELECT COUNT(*)
                   FROM scans
                  WHERE worker_id = %s
-                   AND created_at >= %s
-                   AND created_at <= %s;
+                   AND created_at >= %s AND created_at <= %s;
             """, (worker_id, start, end))
             today_pieces = cur.fetchone()[0]
         finally:
@@ -297,9 +398,6 @@ def scan():
         pool.putconn(conn)
 
 
-# -------------------------
-# Jinja globals
-# -------------------------
 @app.context_processor
 def inject_globals():
     return dict(app_name="Banswara Scanner")

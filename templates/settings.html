@@ -1,9 +1,13 @@
 {% extends "layout.html" %}
 {% block content %}
 <header class="page-header"><h1>Settings</h1></header>
-<p class="muted">
-  Rates are controlled by environment variables:
-  <br>• <code>RATE_PER_PIECE</code> (default 5.0)
-  <br>• <code>DEVICE_SECRET</code> (for scanner auth)
-</p>
+<div class="card">
+  <div class="muted">Environment-controlled settings</div>
+  <div style="height:10px;"></div>
+  <ul>
+    <li><span class="code">RATE_PER_PIECE</span> (default {{ "%.2f"|format(rate_per_piece) }})</li>
+    <li><span class="code">DEVICE_SECRET</span> ({{ "set" if device_secret_set else "not set" }})</li>
+  </ul>
+  <p class="muted">Change these in Render → Environment → Environment Variables, then redeploy.</p>
+</div>
 {% endblock %}

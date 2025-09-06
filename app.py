@@ -46,7 +46,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Keep your existing tables
+    # Base tables
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -92,7 +92,7 @@ def init_db():
         )
     """)
 
-    # New normalized tables to match Pro-X style
+    # Pro-X style normalization
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
@@ -140,7 +140,7 @@ try:
 except Exception as e:
     print("DB init/migrate error:", e)
 
-# ---------------- BASIC PAGES (yours) ---------------- #
+# ---------------- BASIC PAGES ---------------- #
 @app.route("/healthz")
 def healthz():
     return "ok", 200
@@ -178,10 +178,48 @@ def add_worker():
     conn.close()
     return redirect(url_for('workers'))
 
+# ---- UI page stubs so url_for() in layout.html works ----
+@app.get('/operations')
+def operations_page():
+    # Show a simple operations list (can enhance later)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("""
+        SELECT ops.id, ops.operation_name, ops.process, ops.rate_per_piece, ord.order_no
+        FROM operations ops
+        LEFT JOIN orders ord ON ops.order_id = ord.id
+        ORDER BY ops.created_at DESC
+        LIMIT 200
+    """)
+    ops = cur.fetchall()
+    conn.close()
+    return render_template('operations.html', operations=ops)
+
+@app.get('/production')
+def production_page():
+    # Minimal production page; keeps legacy sidebar link alive
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("""
+        SELECT pl.id, w.name AS worker_name, uo.operation_name, pl.quantity, pl.status, pl.created_at
+        FROM production_logs pl
+        JOIN workers w ON pl.worker_id = w.id
+        JOIN user_operations uo ON pl.operation_id = uo.id
+        ORDER BY pl.created_at DESC
+        LIMIT 50
+    """)
+    logs = cur.fetchall()
+    # dropdowns
+    cur.execute("SELECT id, name FROM workers ORDER BY name")
+    workers_list = cur.fetchall()
+    cur.execute("SELECT id, operation_name FROM user_operations ORDER BY operation_name")
+    ops_list = cur.fetchall()
+    conn.close()
+    return render_template('production.html', logs=logs, workers=workers_list, operations=ops_list)
+
 # ---------------- QR (Worker & Bundle) ---------------- #
 @app.get('/qr/worker/<token_id>')
 def worker_qr(token_id):
-    # Encode W:<token> so the scanner knows it's a worker card
     payload = f"W:{token_id}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -190,7 +228,6 @@ def worker_qr(token_id):
 
 @app.get('/qr/bundle/<barcode>')
 def bundle_qr(barcode):
-    # Encode B:<barcode> for bundle scans
     payload = f"B:{barcode}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -257,7 +294,7 @@ def assign_operation_json():
     conn.close()
     return jsonify({"status":"ok","id":uoid,"barcode_value":barcode_value})
 
-# ---------------- UI PAGE: Assign Operations (fix url_for) ---------------- #
+# ---------------- UI PAGE: Assign Operations ---------------- #
 @app.get('/assign_operations')
 def assign_operations():
     conn = get_conn()
@@ -289,7 +326,7 @@ def assign_operations():
 
     return render_template('assign_operation.html', workers=workers, assigned=assigned)
 
-# optional favicon to avoid 404
+# optional favicon to avoid 404 noise
 @app.get('/favicon.ico')
 def favicon():
     return ("", 204)
@@ -530,4 +567,5 @@ def api_activities():
 
 # ---------------- RUN ---------------- #
 if __name__ == "__main__":
+    # On Render, gunicorn runs this module; keeping debug True helps logs in dev
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -69,7 +69,7 @@
 <script>
 function dashboard(){
   return {
-    rate: {{ rate_per_piece|default(1.0) }},
+    rate: {{ (rate_per_piece|default(1.0)) }},
     stats: {},
     rows: [],
     countdown: 60,

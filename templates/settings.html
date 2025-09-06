@@ -1,13 +1,18 @@
 {% extends "layout.html" %}
+{% set title = "Settings" %}
 {% block content %}
-<header class="page-header"><h1>Settings</h1></header>
-<div class="card">
-  <div class="muted">Environment-controlled settings</div>
-  <div style="height:10px;"></div>
-  <ul>
-    <li><span class="code">RATE_PER_PIECE</span> (default {{ "%.2f"|format(rate_per_piece) }})</li>
-    <li><span class="code">DEVICE_SECRET</span> ({{ "set" if device_secret_set else "not set" }})</li>
-  </ul>
-  <p class="muted">Change these in Render → Environment → Environment Variables, then redeploy.</p>
-</div>
+<section class="grid gap-6 max-w-2xl">
+  <header>
+    <h1 class="text-xl font-semibold">Settings</h1>
+    <p class="text-sm text-slate-500">Environment-driven settings (change on Render → Environment).</p>
+  </header>
+
+  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+    <ul class="text-sm text-slate-700 space-y-2">
+      <li><span class="font-medium">DEVICE_SECRET</span> – used by ESP32 to authenticate.</li>
+      <li><span class="font-medium">RATE_PER_PIECE</span> – default <span class="px-1 rounded bg-slate-100">₹{{ "%.2f"|format(rate_per_piece) }}</span></li>
+    </ul>
+    <p class="text-xs text-slate-500 mt-3">Update these variables in Render → Environment → Redeploy.</p>
+  </div>
+</section>
 {% endblock %}

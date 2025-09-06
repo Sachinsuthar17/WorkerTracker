@@ -1,99 +1,69 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Production Tracker{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta charset="utf-8">
+  <title>PRO X – Production</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/modern-css-reset/dist/reset.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
+  <style>
+    :root{--bg:#0f172a;--card:#111827;--muted:#94a3b8;--text:#e5e7eb;--brand:#22d3ee;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+    .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;}
+    .sidebar{background:#0b1220;border-right:1px solid #1f2937;padding:20px}
+    .brand{display:flex;gap:8px;align-items:center;font-weight:700;margin-bottom:20px;color:var(--brand)}
+    .menu{display:flex;flex-direction:column;gap:8px}
+    .menu a{color:var(--text);text-decoration:none;padding:10px 12px;border-radius:8px;display:flex;gap:10px;align-items:center}
+    .menu a.active,.menu a:hover{background:#1f2937}
+    main{padding:24px 28px}
+    .page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+    .live-indicator{display:inline-flex;align-items:center;gap:8px;color:#22c55e;font-weight:600}
+    .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e}
+    .stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .stat{background:var(--card);border:1px solid #1f2937;border-radius:12px;padding:14px}
+    .stat h4{font-size:12px;color:var(--muted);margin:0 0 8px}
+    .stat .v{font-size:22px;font-weight:700}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
+    .card{background:var(--card);border:1px solid #1f2937;border-radius:12px;padding:14px}
+    .card h3{margin:0 0 10px}
+    .activities{display:flex;flex-direction:column;gap:10px;max-height:420px;overflow:auto}
+    .activity{display:grid;grid-template-columns:120px 1fr 110px 120px 90px;gap:8px;padding:10px;border:1px solid #1f2937;border-radius:10px;background:#0f1627}
+    .muted{color:var(--muted)}
+    input,select,button{background:#0f1627;border:1px solid #334155;border-radius:8px;color:var(--text);padding:10px 12px;font:inherit}
+    button{cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #1f2937;text-align:left}
+    @media (max-width:1000px){
+      .app{grid-template-columns:1fr}
+      .sidebar{display:none}
+      .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .grid{grid-template-columns:1fr}
+      .activity{grid-template-columns:100px 1fr}
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body data-color-scheme="dark">
-    <div class="dashboard">
-        <!-- Mobile Menu Toggle -->
-        <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Toggle menu">
-            <i class="fas fa-bars"></i>
-        </button>
-
-        <!-- Sidebar Navigation -->
-        <nav class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo">
-                    <i class="fas fa-industry"></i>
-                    <span>Production Tracker</span>
-                </div>
-            </div>
-            <ul class="sidebar-menu">
-                <li class="menu-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
-                    <a href="{{ url_for('dashboard') }}" class="menu-link">
-                        <i class="fas fa-chart-line"></i>
-                        <span>Dashboard</span>
-                    </a>
-                </li>
-                <li class="menu-item {% if request.endpoint == 'workers' %}active{% endif %}">
-                    <a href="{{ url_for('workers') }}" class="menu-link">
-                        <i class="fas fa-users"></i>
-                        <span>Workers</span>
-                    </a>
-                </li>
-                <li class="menu-item {% if request.endpoint == 'assign_operations' %}active{% endif %}">
-                    <a href="{{ url_for('assign_operations') }}" class="menu-link">
-                        <i class="fas fa-cogs"></i>
-                        <span>Operations</span>
-                    </a>
-                </li>
-                <li class="menu-item {% if request.endpoint == 'production' %}active{% endif %}">
-                    <a href="{{ url_for('production') }}" class="menu-link">
-                        <i class="fas fa-box"></i>
-                        <span>Production</span>
-                    </a>
-                </li>
-                <li class="menu-item {% if request.endpoint == 'reports' %}active{% endif %}">
-                    <a href="{{ url_for('reports') }}" class="menu-link">
-                        <i class="fas fa-chart-bar"></i>
-                        <span>Reports</span>
-                    </a>
-                </li>
-            </ul>
-        </nav>
-
-        <!-- Main Content -->
-        <main class="main-content">
-            {% block content %}{% endblock %}
-        </main>
-    </div>
-
-    <script>
-        // Mobile menu toggle
-        const menuToggle = document.getElementById('mobileMenuToggle');
-        const sidebar = document.getElementById('sidebar');
-
-        if (menuToggle && sidebar) {
-            menuToggle.addEventListener('click', () => {
-                sidebar.classList.toggle('show');
-            });
-        }
-
-        // Print QR function
-        function openPrintWindow(url) {
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(`
-                <html>
-                <head><title>Print QR</title></head>
-                <body style="text-align: center; margin-top: 50px;">
-                    <img src="${url}" alt="QR Code" style="width: 300px;" />
-                    <script>
-                        window.onload = function() {
-                            setTimeout(() => window.print(), 500);
-                        };
-                    <\/script>
-                </body>
-                </html>
-            `);
-            printWindow.document.close();
-        }
-    </script>
-
-    {% block scripts %}{% endblock %}
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><i class="fa-solid fa-bolt"></i> PRO X</div>
+      <nav class="menu">
+        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint=='dashboard' %}active{% endif %}">
+          <i class="fa-solid fa-gauge"></i> Dashboard
+        </a>
+        <a href="{{ url_for('workers') }}" class="{% if request.endpoint=='workers' %}active{% endif %}">
+          <i class="fa-solid fa-users"></i> Workers
+        </a>
+        <!-- the following pages are placeholders only (no Flask routes in app.py):
+             operations.html, reports.html, settings.html, assign_operation.html -->
+      </nav>
+    </aside>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>

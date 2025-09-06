@@ -1,134 +1,48 @@
 {% extends "layout.html" %}
-
 {% block content %}
 <header class="page-header">
-    <h1>Workers Management</h1>
-    <p>Manage your production workers and their departments</p>
+  <h1>Workers</h1>
 </header>
 
-<!-- Add Worker Form -->
-<section class="form-section">
-    <div class="form-card">
-        <h3>Add New Worker</h3>
-        <form method="POST" action="{{ url_for('add_worker') }}" class="form-grid">
-            <div class="form-group">
-                <label for="name">Worker Name</label>
-                <input type="text" id="name" name="name" placeholder="Enter worker name" required>
-            </div>
-            <div class="form-group">
-                <label for="department">Department</label>
-                <select id="department" name="department" required>
-                    <option value="">Select Department</option>
-                    <option value="Production">Production</option>
-                    <option value="Quality">Quality</option>
-                    <option value="Assembly">Assembly</option>
-                    <option value="Packaging">Packaging</option>
-                    <option value="Maintenance">Maintenance</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="token_id">Token ID</label>
-                <input type="text" id="token_id" name="token_id" placeholder="Unique token ID (used for QR)" required>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn-primary">
-                    <i class="fas fa-plus"></i>
-                    Add Worker
-                </button>
-            </div>
-        </form>
-    </div>
+<section class="card">
+  <h3>Add Worker</h3>
+  <form method="POST" action="{{ url_for('add_worker') }}" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px">
+    <input type="text" name="name" placeholder="Name" required>
+    <input type="text" name="department" placeholder="Department / Line">
+    <input type="text" name="token_id" placeholder="Token (printed on card)" required>
+    <button type="submit">Save</button>
+  </form>
 </section>
 
-<!-- Workers List -->
-<section class="table-section">
-    <div class="table-card">
-        <div class="table-header">
-            <h3>All Workers</h3>
-            <span class="table-count">{{ workers|length }} workers</span>
-        </div>
-        <div class="table-container">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Department</th>
-                        <th>Status</th>
-                        <th>Created At</th>
-                        <th>QR Code</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for worker in workers %}
-                    <tr>
-                        <td>{{ worker[0] }}</td>
-                        <td>
-                            <div class="worker-info">
-                                <i class="fas fa-user-circle"></i>
-                                {{ worker[1] }}
-                            </div>
-                        </td>
-                        <td>
-                            <span class="department-tag">{{ worker[2] }}</span>
-                        </td>
-                        <td>
-                            <span class="status-badge {{ 'active' if worker[4] == 'active' else 'inactive' }}">
-                                {{ worker[4] }}
-                            </span>
-                        </td>
-                        <td>{{ worker[8] }}</td>
-                        <td>
-                            {% if worker[3] %}
-                            <div class="qr-actions">
-                                <!-- Dynamic QR from Flask route -->
-                                <img src="{{ url_for('worker_qr', token_id=worker[3]) }}"
-                                     alt="QR Code"
-                                     width="60"
-                                     onclick="openPrintWindow('{{ url_for('worker_qr', token_id=worker[3]) }}')"
-                                     style="cursor:pointer; border:1px solid #ddd; border-radius:4px;">
-
-                                <div class="qr-buttons" style="margin-top: 5px;">
-                                    <a href="{{ url_for('worker_qr', token_id=worker[3]) }}"
-                                       download="{{ worker[3] }}.svg"
-                                       class="btn btn-sm">Download</a>
-                                    <button type="button" class="btn btn-sm"
-                                            onclick="openPrintWindow('{{ url_for('worker_qr', token_id=worker[3]) }}')">
-                                        Print
-                                    </button>
-                                </div>
-                            </div>
-                            {% else %}
-                                N/A
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+<section class="card" style="margin-top:16px">
+  <h3>All Workers</h3>
+  <div style="overflow:auto;margin-top:8px">
+    <table>
+      <thead>
+        <tr class="muted">
+          <th>ID</th>
+          <th>Name</th>
+          <th>Dept</th>
+          <th>Token</th>
+          <th>Logged In</th>
+          <th>Last Login</th>
+          <th>QR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in workers %}
+        <tr>
+          <td>{{ w[0] }}</td>
+          <td>{{ w[1] }}</td>
+          <td>{{ w[2] or '' }}</td>
+          <td>{{ w[3] }}</td>
+          <td>{{ 'Yes' if w[5] else 'No' }}</td>
+          <td>{{ w[6] or '' }}</td>
+          <td><a target="_blank" href="{{ url_for('worker_qr', token_id=w[3]) }}">Worker QR</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-function openPrintWindow(url) {
-    const printWindow = window.open('', '_blank');
-    printWindow.document.write(`
-        <html>
-        <head><title>Print QR</title></head>
-        <body style="text-align:center; margin-top:50px;">
-            <img src="${url}" style="width:300px;" />
-            <script>
-                window.onload = function() {
-                    setTimeout(() => window.print(), 500);
-                };
-            <\/script>
-        </body>
-        </html>
-    `);
-    printWindow.document.close();
-}
-</script>
 {% endblock %}

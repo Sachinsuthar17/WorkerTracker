@@ -1,36 +1,105 @@
 {% extends "layout.html" %}
 {% block content %}
-
 <header class="page-header">
-  <h1>Production Dashboard</h1>
-  <div class="live-indicator"><span class="live-dot"></span> Live</div>
+  <h1>Dashboard</h1>
+  <span class="pill"><span class="live-dot"></span> Live</span>
 </header>
 
-<section class="stats-grid" id="statsGrid">
-  <!-- filled by JS -->
-</section>
-
-<section class="grid">
+<div class="grid cols-3">
   <div class="card">
-    <h3>Hourly Trend</h3>
-    <canvas id="productionChart" height="140"></canvas>
+    <div class="muted">Today Pieces</div>
+    <div class="kpi" id="kpi-pieces">0</div>
   </div>
   <div class="card">
-    <h3>Top Workers (Pieces)</h3>
-    <canvas id="workerChart" height="140"></canvas>
+    <div class="muted">Today Earnings</div>
+    <div class="kpi" id="kpi-amount">0.00</div>
   </div>
-</section>
-
-<section class="card" style="margin-top:16px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <h3>Recent Activities</h3>
-    <span class="muted" id="lastUpdated">—</span>
+  <div class="card">
+    <div class="muted">Refresh</div>
+    <div class="row">
+      <button class="btn" id="btn-refresh">Refresh now</button>
+      <span class="muted">Auto every 2s</span>
+    </div>
   </div>
-  <div class="activities" id="activitiesList"></div>
-</section>
+</div>
 
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+<div style="height:14px;"></div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;">
+    <div class="muted">Recent Activity (latest 100)</div>
+    <div class="row">
+      <label class="muted">Limit</label>
+      <select id="limit">
+        <option>25</option><option selected>100</option><option>150</option><option>200</option>
+      </select>
+    </div>
+  </div>
+  <div style="height:10px;"></div>
+  <div style="overflow:auto;">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Worker</th>
+          <th>Line</th>
+          <th>Operation</th>
+          <th class="right">Amount</th>
+          <th>Barcode</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
 <script>
-  window.DASHBOARD_POLL_MS = 2000; // 2s refresh
+  async function fetchJSON(url){
+    const r = await fetch(url, {headers: {"Accept":"application/json"}});
+    if(!r.ok){ throw new Error(await r.text()); }
+    return await r.json();
+  }
+
+  async function loadStats(){
+    try{
+      const s = await fetchJSON("/api/stats");
+      document.getElementById("kpi-pieces").textContent = (s.pieces||0).toLocaleString();
+      document.getElementById("kpi-amount").textContent = (s.amount||0).toFixed(2);
+    }catch(e){ console.error(e); }
+  }
+
+  function fmtTime(iso){
+    try{ return new Date(iso).toLocaleString(); }catch{ return iso; }
+  }
+
+  async function loadActivities(){
+    const limitSel = document.getElementById("limit");
+    const limit = encodeURIComponent(limitSel.value);
+    try{
+      const rows = await fetchJSON(`/api/activities?limit=${limit}`);
+      const tb = document.querySelector("#tbl tbody");
+      tb.innerHTML = "";
+      for(const r of rows){
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${fmtTime(r.ts)}</td>
+          <td>${r.worker ?? ""}</td>
+          <td>${r.line ?? ""}</td>
+          <td class="code">${r.operation ?? ""}</td>
+          <td class="right">${Number(r.amount||0).toFixed(2)}</td>
+          <td class="code">${r.barcode ?? ""}</td>
+        `;
+        tb.appendChild(tr);
+      }
+    }catch(e){ console.error(e); }
+  }
+
+  document.getElementById("btn-refresh").addEventListener("click", ()=>{
+    loadStats(); loadActivities();
+  });
+
+  // first load + auto refresh
+  loadStats(); loadActivities();
+  setInterval(()=>{ loadStats(); loadActivities(); }, 2000);
 </script>
 {% endblock %}

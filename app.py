@@ -257,6 +257,43 @@ def assign_operation_json():
     conn.close()
     return jsonify({"status":"ok","id":uoid,"barcode_value":barcode_value})
 
+# ---------------- UI PAGE: Assign Operations (fix url_for) ---------------- #
+@app.get('/assign_operations')
+def assign_operations():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # workers for dropdown
+    cur.execute("SELECT id, name, department FROM workers ORDER BY name")
+    workers = cur.fetchall()
+
+    # recent assignments
+    cur.execute("""
+        SELECT uo.id,
+               w.name AS worker_name,
+               w.department,
+               uo.operation_name,
+               uo.barcode_value,
+               uo.is_active,
+               uo.assigned_at,
+               ops.operation_name AS op_title,
+               ops.rate_per_piece
+        FROM user_operations uo
+        JOIN workers w ON uo.user_id = w.id
+        LEFT JOIN operations ops ON uo.operation_id = ops.id
+        ORDER BY uo.assigned_at DESC
+        LIMIT 200
+    """)
+    assigned = cur.fetchall()
+    conn.close()
+
+    return render_template('assign_operation.html', workers=workers, assigned=assigned)
+
+# optional favicon to avoid 404
+@app.get('/favicon.ico')
+def favicon():
+    return ("", 204)
+
 # ---------------- ESP32 APIs ---------------- #
 @app.post('/scan')
 def scan_login():

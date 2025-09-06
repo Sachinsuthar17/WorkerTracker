@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import qrcode
 import qrcode.image.svg
+import random
 
 # ---------------- APP & CORS ---------------- #
 app = Flask(__name__)
@@ -19,8 +20,9 @@ DB_URL = os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("DATABASE_URL is not set. Add it in Render → Environment.")
 
-DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh928hfh92hF9H2hf92h3f9h2F")
 RATE_PER_PIECE = Decimal(os.getenv("RATE_PER_PIECE", "5.0"))
+DEBUG_TOOLS = os.getenv("DEBUG_TOOLS", "1") == "1"
 
 def get_conn():
     return psycopg2.connect(DB_URL, sslmode="require")
@@ -38,7 +40,6 @@ def _today_range(d: date):
     return start, start + timedelta(days=1)
 
 def _rate_sql_literal() -> str:
-    # For inline SQL f-strings
     return f"COALESCE(ops.rate_per_piece, {float(RATE_PER_PIECE)})"
 
 # ---------------- INIT & MIGRATIONS ---------------- #
@@ -46,7 +47,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Workers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -61,7 +61,6 @@ def init_db():
         )
     """)
 
-    # Assignments (legacy + extended)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -72,7 +71,6 @@ def init_db():
         )
     """)
 
-    # Scans
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id SERIAL PRIMARY KEY,
@@ -83,7 +81,6 @@ def init_db():
         )
     """)
 
-    # Manual production entries (optional)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -95,7 +92,6 @@ def init_db():
         )
     """)
 
-    # Normalized order data
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
@@ -131,7 +127,7 @@ def init_db():
         )
     """)
 
-    # Ensure new columns exist on older DBs
+    # Make sure new columns exist
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL")
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
     cur.execute("ALTER TABLE IF EXISTS operations ADD COLUMN IF NOT EXISTS rate_per_piece NUMERIC(10,2) DEFAULT %s", (RATE_PER_PIECE,))
@@ -153,7 +149,6 @@ def healthz():
 def dashboard():
     return render_template('dashboard.html')
 
-# Name endpoints explicitly to match template links
 @app.route('/operations', endpoint='operations')
 def operations_page():
     try:
@@ -177,13 +172,12 @@ def assign_operations_page():
 
 @app.route('/reports', endpoint='reports')
 def reports_page():
-    # If you have templates/reports.html it will render; else fallback
     try:
         return render_template('reports.html')
     except:
         return render_template('blank.html', title="Reports")
 
-# Workers management UI
+# Workers UI
 @app.route('/workers')
 def workers():
     conn = get_conn()
@@ -309,7 +303,6 @@ def scan_login():
 
     cur.execute("UPDATE workers SET is_logged_in=TRUE, last_login=CURRENT_TIMESTAMP WHERE id=%s", (worker['id'],))
 
-    # Today totals
     start, end = _today_range(date.today())
     rate_sql = _rate_sql_literal()
     cur.execute(f"""
@@ -351,20 +344,17 @@ def scan_operation():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-    # worker
     cur.execute("SELECT id,name,department FROM workers WHERE token_id=%s", (token_id,))
     worker = cur.fetchone()
     if not worker:
         conn.close()
         return jsonify({'status':'error','message':'Worker not found'}), 404
 
-    # active assignment
     cur.execute("""SELECT id, operation_id FROM user_operations
                    WHERE user_id=%s AND is_active=TRUE
                    ORDER BY assigned_at DESC LIMIT 1""", (worker['id'],))
     uo = cur.fetchone()
     if not uo:
-        # fallback: legacy assignment QR scan
         cur.execute("""SELECT id, operation_id FROM user_operations
                        WHERE barcode_value=%s ORDER BY assigned_at DESC LIMIT 1""", (barcode_value,))
         uo = cur.fetchone()
@@ -372,17 +362,14 @@ def scan_operation():
             conn.close()
             return jsonify({'status':'error','message':'No active operation assigned or invalid barcode'}), 400
 
-    # optional: bundle id
     cur.execute("SELECT id FROM bundles WHERE barcode_value=%s", (barcode_value,))
     b = cur.fetchone()
     bundle_id = b['id'] if b else None
 
-    # record scan
     cur.execute("""INSERT INTO scans (user_id, operation_id, scanned_at, bundle_id)
                    VALUES (%s,%s,CURRENT_TIMESTAMP,%s)""",
                    (worker['id'], uo['id'], bundle_id))
 
-    # new totals
     start, end = _today_range(date.today())
     rate_sql = _rate_sql_literal()
     cur.execute(f"""
@@ -527,6 +514,63 @@ def api_activities():
              "order": r["order_no"], "operation": r["op"], "bundle": r["bundle_code"],
              "pieces": 1, "earnings": float(r["earn"])} for r in rows]
     return jsonify(data)
+
+# --------- DEBUG HELP: create a fake scan so you can see the dashboard move ---------
+@app.get("/debug/mock_scan")
+def debug_mock_scan():
+    if not DEBUG_TOOLS:
+        return jsonify({"status": "disabled"}), 403
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # 1) ensure at least one worker
+    cur.execute("SELECT id, token_id FROM workers LIMIT 1")
+    w = cur.fetchone()
+    if not w:
+        token = "WID" + str(random.randint(1000, 9999))
+        cur.execute("INSERT INTO workers (name, department, token_id, is_logged_in) VALUES (%s,%s,%s,TRUE) RETURNING id, token_id",
+                    ("Demo Worker", "LINE-1", token))
+        w = cur.fetchone()
+
+    # 2) ensure one order + op + assignment
+    cur.execute("SELECT id FROM orders LIMIT 1")
+    ord_row = cur.fetchone()
+    if not ord_row:
+        cur.execute("INSERT INTO orders (order_no, style_no, color, size, qty, line) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                    ("PO-1001", "STYLE-7", "BLUE", "40", 1000, "LINE-1"))
+        ord_row = cur.fetchone()
+
+    order_id = ord_row["id"]
+
+    cur.execute("SELECT id FROM operations WHERE order_id=%s LIMIT 1", (order_id,))
+    op_row = cur.fetchone()
+    if not op_row:
+        cur.execute("INSERT INTO operations (order_id, operation_name, process, rate_per_piece) VALUES (%s,%s,%s,%s) RETURNING id",
+                    (order_id, "Stitch", "Sewing", RATE_PER_PIECE))
+        op_row = cur.fetchone()
+
+    cur.execute("""SELECT id FROM user_operations WHERE user_id=%s AND is_active=TRUE
+                   ORDER BY assigned_at DESC LIMIT 1""", (w["id"],))
+    uo = cur.fetchone()
+    if not uo:
+        bc = f"{w['id']}-Stitch-{int(datetime.now().timestamp())}"
+        cur.execute("""INSERT INTO user_operations (user_id, operation_name, barcode_value, operation_id, is_active)
+                       VALUES (%s,%s,%s,%s,TRUE) RETURNING id""",
+                    (w["id"], "Stitch", bc, op_row["id"]))
+        uo = cur.fetchone()
+
+    # 3) make a fake bundle and scan
+    bcode = "BUND-" + str(random.randint(10000, 99999))
+    cur.execute("INSERT INTO bundles (order_id, size, qty, barcode_value) VALUES (%s,%s,%s,%s) RETURNING id",
+                (order_id, "40", 10, bcode))
+    b = cur.fetchone()
+
+    cur.execute("INSERT INTO scans (user_id, operation_id, scanned_at, bundle_id) VALUES (%s,%s,CURRENT_TIMESTAMP,%s)",
+                (w["id"], uo["id"], b["id"]))
+    conn.commit(); conn.close()
+
+    return jsonify({"status": "ok", "note": "One demo scan inserted."})
 
 # ---------------- RUN ---------------- #
 if __name__ == "__main__":

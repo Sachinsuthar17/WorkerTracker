@@ -2,125 +2,131 @@
 {% set title = "Workers" %}
 
 {% block content %}
-<section class="grid gap-4">
-  <header class="flex items-end justify-between">
-    <div>
-      <h1 class="text-xl font-semibold">Workers</h1>
-      <p class="text-sm text-slate-500">Add workers, edit details, generate/print QR codes for login.</p>
+<div class="card">
+  <div class="card-header">
+    <div class="left">
+      <h2 class="card-title">Workers</h2>
+      <p class="card-sub">Manage users, tokens & QR codes</p>
     </div>
-  </header>
-
-  {% if banner_msg %}
-  <div class="rounded-xl px-4 py-3 {{ 'bg-red-50 text-red-700 border border-red-200' if banner_err else 'bg-emerald-50 text-emerald-700 border border-emerald-200' }}">
-    {{ banner_msg }}
-  </div>
-  {% endif %}
-
-  <!-- Add Worker Card -->
-  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <form class="grid md:grid-cols-4 gap-4 items-end" method="post" action="{{ url_for('workers_add') }}">
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">Name</label>
-        <input name="name" type="text" placeholder="e.g. Rakesh Kumar"
-               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">Department / Line</label>
-        <input name="department" type="text" placeholder="e.g. Stitching A"
-               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">Token (optional)</label>
-        <input name="token" type="text" placeholder="Leave blank to auto-generate"
-               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
-        <p class="text-[11px] text-slate-500 mt-1">If you enter one, don’t include <code>W:</code>; we’ll add it.</p>
-      </div>
-      <div>
-        <button type="submit"
-                class="w-full h-10 rounded-xl bg-sky-600 text-white font-medium hover:bg-sky-700 transition">
-          + Add Worker
-        </button>
-      </div>
+    <form method="get" class="search">
+      <input type="text" name="q" placeholder="Search name / token / dept" value="{{search or ''}}">
+      <button type="submit" class="btn">Search</button>
+      <a href="{{ url_for('workers_page') }}" class="btn btn-ghost">Clear</a>
     </form>
   </div>
 
-  <!-- Worker List -->
-  <div class="bg-white rounded-2xl p-0 shadow-card border border-slate-100 overflow-hidden">
-    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-      <h2 class="text-sm font-semibold">All Workers</h2>
-      <span class="text-xs text-slate-500">{{ workers|length }} total</span>
-    </div>
+  <div class="card-body">
+    <details class="create-box" open>
+      <summary><strong>Add New Worker</strong></summary>
+      <form method="post" action="{{ url_for('worker_create') }}" class="grid">
+        <label>
+          <span>Name</span>
+          <input required name="name" placeholder="e.g. Rahul Sharma">
+        </label>
+        <label>
+          <span>Token (manual)</span>
+          <input required name="token_id" placeholder="e.g. RAHUL123 (no W:)">
+        </label>
+        <label>
+          <span>Department / Line</span>
+          <input name="department" placeholder="e.g. Stitching A1">
+        </label>
+        <div class="row-actions">
+          <button class="btn">Create</button>
+        </div>
+      </form>
+      <p class="hint">QR content will be generated as <code>W:&lt;TOKEN&gt;</code>. The ESP32 uses that for login / logout toggle & auto-switch.</p>
+    </details>
 
-    <div class="overflow-x-auto">
-      <table class="min-w-full text-sm">
-        <thead class="bg-slate-50 text-slate-600">
+    {% if workers %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <th class="text-left px-5 py-3 font-medium">ID</th>
-            <th class="text-left px-5 py-3 font-medium">Name</th>
-            <th class="text-left px-5 py-3 font-medium">Department</th>
-            <th class="text-left px-5 py-3 font-medium">Token</th>
-            <th class="text-left px-5 py-3 font-medium">QR</th>
-            <th class="text-left px-5 py-3 font-medium">Actions</th>
+            <th>Name</th>
+            <th>Token</th>
+            <th>Dept</th>
+            <th>QR</th>
+            <th style="width:240px;">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for w in workers %}
-          <tr id="w{{ w.id }}" class="border-t border-slate-100 hover:bg-slate-50/50">
-            <td class="px-5 py-3 text-slate-600">{{ w.id }}</td>
-            <td class="px-5 py-3 font-medium">{{ w.name or "(no name)" }}</td>
-            <td class="px-5 py-3">{{ w.department }}</td>
-            <td class="px-5 py-3">
-              {% if w.token_id %}
-                <code class="text-slate-600">{{ w.token_id }}</code>
-              {% else %}
-                <span class="text-slate-400">—</span>
-              {% endif %}
+          <tr>
+            <td>
+              <form method="post" action="{{ url_for('worker_edit', wid=w.id) }}" class="inline-form">
+                <input name="name" value="{{ w.name }}" required>
             </td>
-            <td class="px-5 py-3">
-              {% if w.token_id %}
-              <div class="flex gap-2">
-                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
-                   href="{{ url_for('worker_qr_png', worker_id=w.id) }}" target="_blank" title="Open PNG QR">
-                  PNG
-                </a>
-                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
-                   href="{{ url_for('worker_qr_svg', worker_id=w.id) }}" target="_blank" title="Open SVG QR">
-                  SVG
-                </a>
-                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-slate-800 text-white text-xs font-medium hover:bg-slate-900"
-                   href="{{ url_for('workers_print', worker_id=w.id) }}" target="_blank" title="Print QR">
-                  Print
-                </a>
-              </div>
-              {% else %}
-              <span class="text-xs text-slate-400">No token</span>
-              {% endif %}
+            <td>
+                <input name="token_id" value="{{ w.token_id }}" required>
             </td>
-            <td class="px-5 py-3">
-              <div class="flex gap-2">
-                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-sky-600 text-white text-xs font-medium hover:bg-sky-700"
-                   href="{{ url_for('workers_edit_page', worker_id=w.id) }}">
-                  Edit
-                </a>
-                <form method="post" action="{{ url_for('workers_delete', worker_id=w.id) }}"
-                      onsubmit="return confirm('Delete this worker? This will also remove their scans.');">
-                  <button type="submit"
-                          class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-rose-600 text-white text-xs font-medium hover:bg-rose-700">
-                    Delete
-                  </button>
-                </form>
-              </div>
+            <td>
+                <input name="department" value="{{ w.department or '' }}">
+            </td>
+            <td>
+              <img src="{{ url_for('worker_qr_png', wid=w.id) }}" alt="QR" class="qr-thumb">
+            </td>
+            <td class="actions">
+                <button class="btn btn-small">Save</button>
+              </form>
+              <a class="btn btn-small btn-ghost" href="{{ url_for('worker_print', wid=w.id) }}" target="_blank">Print QR</a>
+              <form method="post" action="{{ url_for('worker_delete', wid=w.id) }}" class="inline-form" onsubmit="return confirm('Delete this worker?');">
+                <button class="btn btn-small btn-danger">Delete</button>
+              </form>
             </td>
           </tr>
           {% endfor %}
-          {% if workers|length == 0 %}
-          <tr>
-            <td colspan="6" class="px-5 py-6 text-center text-slate-500">No workers yet. Add one above.</td>
-          </tr>
-          {% endif %}
         </tbody>
       </table>
     </div>
+    {% else %}
+      <div class="empty">No workers yet. Add your first worker above.</div>
+    {% endif %}
   </div>
-</section>
+</div>
+
+{% if get_flashed_messages(with_categories=true) %}
+  <div class="flash-wrap">
+    {% for cat,msg in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{cat}}">{{ msg }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<style>
+.card { background:#0b1220; border:1px solid #1b2742; border-radius:14px; }
+.card-header { display:flex; align-items:end; justify-content:space-between; padding:18px 18px 0; }
+.card-title { margin:0; font-size:20px; color:#e8f0ff; }
+.card-sub { margin:2px 0 0; color:#9bb0cc; font-size:12px; }
+.card-body { padding:16px; }
+.search { display:flex; gap:8px; }
+.search input { min-width:260px; }
+.create-box { background:#0e1730; border:1px dashed #2a3a68; border-radius:10px; padding:12px 14px; margin-bottom:16px; }
+.create-box summary { cursor:pointer; color:#cfe0ff; margin-bottom:8px; }
+.grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; align-items:end; }
+.grid label span { display:block; font-size:12px; color:#9db3d9; margin-bottom:6px; }
+.row-actions { display:flex; gap:8px; }
+.table-wrap { overflow:auto; border-radius:12px; border:1px solid #1b2742; }
+.table { width:100%; border-collapse:collapse; }
+.table th, .table td { padding:10px 12px; border-bottom:1px solid #15213a; color:#dfe8ff; }
+.table th { text-align:left; color:#9bb0cc; font-weight:600; background:#0f1a33; position:sticky; top:0; }
+.inline-form { display:inline; }
+.qr-thumb { height:56px; width:56px; object-fit:contain; background:#fff; border-radius:8px; }
+.actions { display:flex; gap:8px; align-items:center; }
+input, select { background:#091126; color:#e8f0ff; border:1px solid #1b2742; border-radius:8px; padding:8px 10px; width:100%; }
+.btn { background:#2d6be7; color:#fff; border:0; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; }
+.btn:hover { filter:brightness(1.08); }
+.btn-ghost { background:transparent; border:1px solid #2d6be7; color:#cfe0ff; }
+.btn-small { padding:6px 10px; border-radius:8px; font-size:12px; }
+.btn-danger { background:#e02d3c; }
+.empty { padding:18px; text-align:center; color:#9bb0cc; }
+.flash-wrap { position:fixed; bottom:16px; right:16px; display:flex; flex-direction:column; gap:8px; }
+.flash { padding:10px 12px; border-radius:10px; font-weight:600; }
+.flash.success { background:#11391c; color:#b9ffd0; border:1px solid #236e38; }
+.flash.error { background:#3a1218; color:#ffc4c9; border:1px solid #7a1e2a; }
+@media (max-width: 900px){
+  .grid{ grid-template-columns:1fr; }
+  .search input { min-width:160px; }
+}
+</style>
 {% endblock %}

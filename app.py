@@ -38,7 +38,7 @@ def _today_range(d: date):
     return start, start + timedelta(days=1)
 
 def _rate_sql_literal() -> str:
-    # We will use this string inside f-strings; pass the default as a python float to keep SQL happy.
+    # For inline SQL f-strings
     return f"COALESCE(ops.rate_per_piece, {float(RATE_PER_PIECE)})"
 
 # ---------------- INIT & MIGRATIONS ---------------- #
@@ -83,7 +83,7 @@ def init_db():
         )
     """)
 
-    # (Optional) manual production entries
+    # Manual production entries (optional)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -95,7 +95,7 @@ def init_db():
         )
     """)
 
-    # Normalized order data (Pro-X style)
+    # Normalized order data
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
@@ -134,7 +134,6 @@ def init_db():
     # Ensure new columns exist on older DBs
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL")
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
-    # THIS fixes your UndefinedColumn error on old DBs:
     cur.execute("ALTER TABLE IF EXISTS operations ADD COLUMN IF NOT EXISTS rate_per_piece NUMERIC(10,2) DEFAULT %s", (RATE_PER_PIECE,))
 
     conn.commit()
@@ -154,30 +153,37 @@ def healthz():
 def dashboard():
     return render_template('dashboard.html')
 
-# These names match what your templates are calling (to avoid BuildError)
-@app.route('/operations')
+# Name endpoints explicitly to match template links
+@app.route('/operations', endpoint='operations')
 def operations_page():
-    # Render your existing template if you have one; otherwise a thin placeholder.
     try:
         return render_template('operations.html')
     except:
         return render_template('blank.html', title="Operations")
 
-@app.route('/production')
-def production():
+@app.route('/production', endpoint='production')
+def production_page():
     try:
         return render_template('production.html')
     except:
         return render_template('blank.html', title="Production")
 
-@app.route('/assign_operations')
-def assign_operations():
+@app.route('/assign_operations', endpoint='assign_operations')
+def assign_operations_page():
     try:
         return render_template('assign_operation.html')
     except:
         return render_template('blank.html', title="Assign Operations")
 
-# Workers management UI (kept from your app)
+@app.route('/reports', endpoint='reports')
+def reports_page():
+    # If you have templates/reports.html it will render; else fallback
+    try:
+        return render_template('reports.html')
+    except:
+        return render_template('blank.html', title="Reports")
+
+# Workers management UI
 @app.route('/workers')
 def workers():
     conn = get_conn()
@@ -210,7 +216,6 @@ def add_worker():
 # ---------------- QR (Worker & Bundle) ---------------- #
 @app.get('/qr/worker/<token_id>')
 def worker_qr(token_id):
-    # Encode W:<token> so the scanner knows it's a worker card
     payload = f"W:{token_id}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -219,7 +224,6 @@ def worker_qr(token_id):
 
 @app.get('/qr/bundle/<barcode>')
 def bundle_qr(barcode):
-    # Encode B:<barcode> for bundle scans
     payload = f"B:{barcode}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -305,7 +309,7 @@ def scan_login():
 
     cur.execute("UPDATE workers SET is_logged_in=TRUE, last_login=CURRENT_TIMESTAMP WHERE id=%s", (worker['id'],))
 
-    # today totals
+    # Today totals
     start, end = _today_range(date.today())
     rate_sql = _rate_sql_literal()
     cur.execute(f"""
@@ -360,7 +364,7 @@ def scan_operation():
                    ORDER BY assigned_at DESC LIMIT 1""", (worker['id'],))
     uo = cur.fetchone()
     if not uo:
-        # fallback: legacy assignment QR scan (if someone scanned the assignment QR directly)
+        # fallback: legacy assignment QR scan
         cur.execute("""SELECT id, operation_id FROM user_operations
                        WHERE barcode_value=%s ORDER BY assigned_at DESC LIMIT 1""", (barcode_value,))
         uo = cur.fetchone()
@@ -368,7 +372,7 @@ def scan_operation():
             conn.close()
             return jsonify({'status':'error','message':'No active operation assigned or invalid barcode'}), 400
 
-    # optional: look up bundle id by bundle barcode
+    # optional: bundle id
     cur.execute("SELECT id FROM bundles WHERE barcode_value=%s", (barcode_value,))
     b = cur.fetchone()
     bundle_id = b['id'] if b else None
@@ -526,5 +530,4 @@ def api_activities():
 
 # ---------------- RUN ---------------- #
 if __name__ == "__main__":
-    # Local dev
     app.run(host="0.0.0.0", port=5000, debug=True)

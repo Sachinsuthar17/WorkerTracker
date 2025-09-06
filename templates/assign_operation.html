@@ -1,14 +1,17 @@
 {% extends "layout.html" %}
-{% set title = "Assign Operation" %}
+{% set title = "Operations" %}
 {% block content %}
 <section class="grid gap-4">
   <header>
-    <h1 class="text-xl font-semibold">Assign Operation</h1>
-    <p class="text-sm text-slate-500">Link workers to current lines/targets (UI placeholder).</p>
+    <h1 class="text-xl font-semibold">Operations</h1>
+    <p class="text-sm text-slate-500">Define and document operations codes (UI placeholder).</p>
   </header>
 
   <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <p class="text-sm text-slate-600">Your ESP32 scans determine the worker currently active; additional assignment UI can be added here later.</p>
+    <ul class="list-disc pl-5 text-sm text-slate-700 space-y-1">
+      <li>Operation codes are inferred from bundle barcodes (e.g., <code class="px-1 bg-slate-100 rounded">B:OP10-XXXX</code> → <code class="px-1 bg-slate-100 rounded">OP10</code>).</li>
+      <li>Earnings are calculated from scans × rate (₹{{ "%.2f"|format((rate_per_piece|default(1.0))) }}).</li>
+    </ul>
   </div>
 </section>
 {% endblock %}

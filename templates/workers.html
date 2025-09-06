@@ -6,13 +6,19 @@
   <header class="flex items-end justify-between">
     <div>
       <h1 class="text-xl font-semibold">Workers</h1>
-      <p class="text-sm text-slate-500">Add workers and generate QR codes for login.</p>
+      <p class="text-sm text-slate-500">Add workers, edit details, generate/print QR codes for login.</p>
     </div>
   </header>
 
+  {% if banner_msg %}
+  <div class="rounded-xl px-4 py-3 {{ 'bg-red-50 text-red-700 border border-red-200' if banner_err else 'bg-emerald-50 text-emerald-700 border border-emerald-200' }}">
+    {{ banner_msg }}
+  </div>
+  {% endif %}
+
   <!-- Add Worker Card -->
   <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <form class="grid md:grid-cols-3 gap-4 items-end" method="post" action="{{ url_for('workers_add') }}">
+    <form class="grid md:grid-cols-4 gap-4 items-end" method="post" action="{{ url_for('workers_add') }}">
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">Name</label>
         <input name="name" type="text" placeholder="e.g. Rakesh Kumar"
@@ -24,13 +30,18 @@
                class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
       </div>
       <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Token (optional)</label>
+        <input name="token" type="text" placeholder="Leave blank to auto-generate"
+               class="w-full rounded-xl border-slate-200 focus:ring-2 focus:ring-sky-300 focus:border-sky-300" />
+        <p class="text-[11px] text-slate-500 mt-1">If you enter one, don’t include <code>W:</code>; we’ll add it.</p>
+      </div>
+      <div>
         <button type="submit"
                 class="w-full h-10 rounded-xl bg-sky-600 text-white font-medium hover:bg-sky-700 transition">
-          + Add Worker & Generate QR
+          + Add Worker
         </button>
       </div>
     </form>
-    <p class="mt-2 text-xs text-slate-500">A unique token is created automatically. The QR encodes <code>W:&lt;token&gt;</code> for the ESP32.</p>
   </div>
 
   <!-- Worker List -->
@@ -49,6 +60,7 @@
             <th class="text-left px-5 py-3 font-medium">Department</th>
             <th class="text-left px-5 py-3 font-medium">Token</th>
             <th class="text-left px-5 py-3 font-medium">QR</th>
+            <th class="text-left px-5 py-3 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -58,27 +70,52 @@
             <td class="px-5 py-3 font-medium">{{ w.name or "(no name)" }}</td>
             <td class="px-5 py-3">{{ w.department }}</td>
             <td class="px-5 py-3">
-              <code class="text-slate-600">{{ w.token_id or "—" }}</code>
+              {% if w.token_id %}
+                <code class="text-slate-600">{{ w.token_id }}</code>
+              {% else %}
+                <span class="text-slate-400">—</span>
+              {% endif %}
             </td>
             <td class="px-5 py-3">
               {% if w.token_id %}
-              <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
-                 href="{{ url_for('worker_qr_png', worker_id=w.id) }}" target="_blank" title="Open PNG QR">
-                PNG
-              </a>
-              <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
-                 href="{{ url_for('worker_qr_svg', worker_id=w.id) }}" target="_blank" title="Open SVG QR">
-                SVG
-              </a>
+              <div class="flex gap-2">
+                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
+                   href="{{ url_for('worker_qr_png', worker_id=w.id) }}" target="_blank" title="Open PNG QR">
+                  PNG
+                </a>
+                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
+                   href="{{ url_for('worker_qr_svg', worker_id=w.id) }}" target="_blank" title="Open SVG QR">
+                  SVG
+                </a>
+                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-slate-800 text-white text-xs font-medium hover:bg-slate-900"
+                   href="{{ url_for('workers_print', worker_id=w.id) }}" target="_blank" title="Print QR">
+                  Print
+                </a>
+              </div>
               {% else %}
               <span class="text-xs text-slate-400">No token</span>
               {% endif %}
+            </td>
+            <td class="px-5 py-3">
+              <div class="flex gap-2">
+                <a class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-sky-600 text-white text-xs font-medium hover:bg-sky-700"
+                   href="{{ url_for('workers_edit_page', worker_id=w.id) }}">
+                  Edit
+                </a>
+                <form method="post" action="{{ url_for('workers_delete', worker_id=w.id) }}"
+                      onsubmit="return confirm('Delete this worker? This will also remove their scans.');">
+                  <button type="submit"
+                          class="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 bg-rose-600 text-white text-xs font-medium hover:bg-rose-700">
+                    Delete
+                  </button>
+                </form>
+              </div>
             </td>
           </tr>
           {% endfor %}
           {% if workers|length == 0 %}
           <tr>
-            <td colspan="5" class="px-5 py-6 text-center text-slate-500">No workers yet. Add one above.</td>
+            <td colspan="6" class="px-5 py-6 text-center text-slate-500">No workers yet. Add one above.</td>
           </tr>
           {% endif %}
         </tbody>

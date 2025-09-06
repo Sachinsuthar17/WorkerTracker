@@ -1,60 +1,60 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Assign Operation (JSON)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f172a;color:#e5e7eb;margin:0;padding:24px}
-    .card{max-width:800px;margin:0 auto;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px}
-    input,button{background:#0f1627;border:1px solid #334155;border-radius:8px;color:#e5e7eb;padding:10px 12px;font:inherit}
-    button{cursor:pointer}
-    .row{display:grid;grid-template-columns:220px 1fr auto;gap:10px}
-    .muted{color:#94a3b8}
-    a{color:#22d3ee}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>Assign Operation via /assign_operation_json</h2>
-    <p class="muted">Enter a Worker ID and Operation Name. This calls your Flask JSON endpoint and returns the barcode value.</p>
-    <form id="assignForm" class="row">
-      <input id="user_id" type="number" placeholder="Worker ID" required>
-      <input id="operation_name" placeholder="Operation name" required>
-      <button>Assign</button>
-    </form>
-    <p id="assignMsg" class="muted" style="margin-top:10px"></p>
-    <div id="qrWrap" style="margin-top:12px"></div>
-  </div>
+{% extends "layout.html" %}
+{% block content %}
+<header class="page-header"><h1>Assign Operations</h1></header>
 
-  <script>
-    async function getQR(svgUrl){
-      const r = await fetch(svgUrl);
-      if (!r.ok) throw new Error('QR failed');
-      return await r.text();
-    }
-    document.getElementById('assignForm').addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const user_id = document.getElementById('user_id').value;
-      const operation_name = document.getElementById('operation_name').value.trim();
-      const res = await fetch('/assign_operation_json',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({user_id,operation_name})
-      });
-      const j = await res.json();
-      const msgEl = document.getElementById('assignMsg');
-      const qrEl = document.getElementById('qrWrap');
-      if(res.ok){
-        msgEl.textContent = `Assigned OK. Barcode: ${j.barcode_value}`;
-        // this is an assignment barcode (user_operations). Use operation_qr only if you add such route.
-        // For now we display the raw code; bundle QRs use /qr/bundle/<code>.
-        qrEl.innerHTML = `<div class="muted">Barcode value:</div><code>${j.barcode_value}</code>`;
-      }else{
-        msgEl.textContent = j.message || 'Failed';
-        qrEl.innerHTML = '';
-      }
+<div class="card">
+  <form id="f-assign" class="row" onsubmit="return false;">
+    <select name="worker_id" required>
+      <option value="">Select worker…</option>
+      {% for w in workers %}
+        <option value="{{ w.id }}">{{ w.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="operation_id" required>
+      <option value="">Select operation…</option>
+      {% for o in operations %}
+        <option value="{{ o.id }}">{{ o.code }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn">Assign</button>
+  </form>
+</div>
+<div style="height:12px;"></div>
+
+<div class="card">
+  <div class="muted">Current assignments</div>
+  <div style="height:8px;"></div>
+  <div style="overflow:auto;">
+    <table id="tbl">
+      <thead><tr><th>Worker</th><th>Operation</th><th></th></tr></thead>
+      <tbody>
+        {% for a in assignments %}
+        <tr data-id="{{ a.id }}">
+          <td>{{ a.worker }}</td>
+          <td class="code">{{ a.operation }}</td>
+          <td class="right"><button class="btn secondary btn-del">Remove</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  document.querySelector("#f-assign").addEventListener("submit", async (e)=>{
+    const fd = new FormData(e.target);
+    const r = await fetch("/assign/save", {method:"POST", body:fd});
+    if(r.ok){ location.reload(); } else { alert(await r.text()); }
+  });
+
+  document.querySelectorAll(".btn-del").forEach(btn=>{
+    btn.addEventListener("click", async (e)=>{
+      const tr = e.target.closest("tr");
+      const id = tr.dataset.id;
+      const fd = new FormData(); fd.append("assignment_id", id);
+      const r = await fetch("/assign/delete", {method:"POST", body:fd});
+      if(r.ok){ tr.remove(); } else { alert(await r.text()); }
     });
-  </script>
-</body>
-</html>
+  });
+</script>
+{% endblock %}

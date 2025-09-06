@@ -1,105 +1,116 @@
 {% extends "layout.html" %}
+{% set title = "Dashboard" %}
 {% block content %}
-<header class="page-header">
-  <h1>Dashboard</h1>
-  <span class="pill"><span class="live-dot"></span> Live</span>
-</header>
 
-<div class="grid cols-3">
-  <div class="card">
-    <div class="muted">Today Pieces</div>
-    <div class="kpi" id="kpi-pieces">0</div>
-  </div>
-  <div class="card">
-    <div class="muted">Today Earnings</div>
-    <div class="kpi" id="kpi-amount">0.00</div>
-  </div>
-  <div class="card">
-    <div class="muted">Refresh</div>
-    <div class="row">
-      <button class="btn" id="btn-refresh">Refresh now</button>
-      <span class="muted">Auto every 2s</span>
+<div x-data="dashboard()" x-init="init()" class="grid gap-6">
+  <!-- Stat cards -->
+  <section class="grid md:grid-cols-3 gap-4">
+    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+      <div class="text-xs uppercase tracking-wide text-slate-500">Total Workers</div>
+      <div class="mt-2 text-3xl font-semibold" x-text="stats.total_workers ?? '—'"></div>
     </div>
-  </div>
-</div>
-
-<div style="height:14px;"></div>
-
-<div class="card">
-  <div class="row" style="justify-content:space-between;">
-    <div class="muted">Recent Activity (latest 100)</div>
-    <div class="row">
-      <label class="muted">Limit</label>
-      <select id="limit">
-        <option>25</option><option selected>100</option><option>150</option><option>200</option>
-      </select>
+    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+      <div class="text-xs uppercase tracking-wide text-slate-500">Active Today</div>
+      <div class="mt-2 text-3xl font-semibold" x-text="stats.active_today ?? '—'"></div>
     </div>
-  </div>
-  <div style="height:10px;"></div>
-  <div style="overflow:auto;">
-    <table id="tbl">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Worker</th>
-          <th>Line</th>
-          <th>Operation</th>
-          <th class="right">Amount</th>
-          <th>Barcode</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
+      <div class="text-xs uppercase tracking-wide text-slate-500">Scans Today</div>
+      <div class="mt-2 text-3xl font-semibold flex items-center gap-2">
+        <span x-text="stats.scans_today ?? '—'"></span>
+        <span class="text-sm font-medium px-2 py-0.5 rounded-full bg-brand-50 text-brand-700"
+              x-show="stats.scans_today !== undefined">₹<span x-text="(stats.scans_today * rate).toFixed(0)"></span></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Recent activity -->
+  <section class="bg-white rounded-2xl shadow-card border border-slate-100 overflow-hidden">
+    <div class="p-5 flex items-center justify-between">
+      <h2 class="font-semibold">Recent Activity</h2>
+      <div class="text-xs text-slate-500">Auto refresh in <span x-text="countdown"></span>s</div>
+    </div>
+    <div class="overflow-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="text-left font-medium px-4 py-2">Time</th>
+            <th class="text-left font-medium px-4 py-2">Worker</th>
+            <th class="text-left font-medium px-4 py-2">Line</th>
+            <th class="text-left font-medium px-4 py-2">Operation</th>
+            <th class="text-left font-medium px-4 py-2">Barcode</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="row in rows" :key="row.ts + row.barcode">
+            <tr class="border-t border-slate-100 hover:bg-slate-50/60">
+              <td class="px-4 py-2" x-text="formatTime(row.ts)"></td>
+              <td class="px-4 py-2">
+                <div class="flex items-center gap-2">
+                  <div class="h-6 w-6 rounded-full bg-brand-100 text-brand-800 grid place-items-center text-xs font-semibold" x-text="avatar(row.worker)"></div>
+                  <div class="font-medium" x-text="row.worker || '(unknown)'"></div>
+                </div>
+              </td>
+              <td class="px-4 py-2" x-text="row.line || '-'"></td>
+              <td class="px-4 py-2">
+                <span class="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-700" x-text="row.operation_code || '-'"></span>
+              </td>
+              <td class="px-4 py-2 font-mono text-xs text-slate-600" x-text="row.barcode || '-'"></td>
+            </tr>
+          </template>
+          <tr x-show="rows.length===0">
+            <td colspan="5" class="px-4 py-8 text-center text-slate-500">No scans yet today.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
 <script>
-  async function fetchJSON(url){
-    const r = await fetch(url, {headers: {"Accept":"application/json"}});
-    if(!r.ok){ throw new Error(await r.text()); }
-    return await r.json();
+function dashboard(){
+  return {
+    rate: {{ rate_per_piece|default(1.0) }},
+    stats: {},
+    rows: [],
+    countdown: 60,
+    tickTimer: null,
+    async fetchStats(){
+      const r = await fetch(`/api/stats`);
+      if(r.ok) this.stats = await r.json();
+    },
+    async fetchRows(){
+      const r = await fetch(`/api/activities?limit=100`);
+      if(r.ok) this.rows = await r.json();
+    },
+    loop(){
+      this.countdown = 60;
+      this.tickTimer = setInterval(async ()=>{
+        this.countdown--;
+        if(this.countdown<=0){
+          await this.refresh();
+          this.countdown = 60;
+        }
+      }, 1000);
+    },
+    async refresh(){
+      await Promise.all([this.fetchStats(), this.fetchRows()]);
+    },
+    formatTime(ts){
+      if(!ts) return '-';
+      try{
+        const d = new Date(ts);
+        return d.toLocaleString();
+      }catch(e){ return ts; }
+    },
+    avatar(name){
+      const s = (name||'').trim().split(/\s+/);
+      return (s[0]?.[0]||'B') + (s[1]?.[0]||'S');
+    },
+    async init(){
+      await this.refresh();
+      this.loop();
+    }
   }
-
-  async function loadStats(){
-    try{
-      const s = await fetchJSON("/api/stats");
-      document.getElementById("kpi-pieces").textContent = (s.pieces||0).toLocaleString();
-      document.getElementById("kpi-amount").textContent = (s.amount||0).toFixed(2);
-    }catch(e){ console.error(e); }
-  }
-
-  function fmtTime(iso){
-    try{ return new Date(iso).toLocaleString(); }catch{ return iso; }
-  }
-
-  async function loadActivities(){
-    const limitSel = document.getElementById("limit");
-    const limit = encodeURIComponent(limitSel.value);
-    try{
-      const rows = await fetchJSON(`/api/activities?limit=${limit}`);
-      const tb = document.querySelector("#tbl tbody");
-      tb.innerHTML = "";
-      for(const r of rows){
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${fmtTime(r.ts)}</td>
-          <td>${r.worker ?? ""}</td>
-          <td>${r.line ?? ""}</td>
-          <td class="code">${r.operation ?? ""}</td>
-          <td class="right">${Number(r.amount||0).toFixed(2)}</td>
-          <td class="code">${r.barcode ?? ""}</td>
-        `;
-        tb.appendChild(tr);
-      }
-    }catch(e){ console.error(e); }
-  }
-
-  document.getElementById("btn-refresh").addEventListener("click", ()=>{
-    loadStats(); loadActivities();
-  });
-
-  // first load + auto refresh
-  loadStats(); loadActivities();
-  setInterval(()=>{ loadStats(); loadActivities(); }, 2000);
+}
 </script>
 {% endblock %}

@@ -1,50 +1,62 @@
 <!doctype html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <title>Print QR · {{ worker.name or "(no name)" }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root { --ink:#0b1220; --muted:#5b6473; }
-    * { box-sizing: border-box; }
-    html, body { margin:0; padding:0; color:var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji"; }
-    .page { max-width: 720px; margin: 24px auto; padding: 24px; }
-    .card { border:1px solid #e5e7eb; border-radius:16px; padding:24px; }
-    .row { display:flex; gap:24px; align-items:center; }
-    .qr { width:260px; height:260px; border:1px solid #e5e7eb; border-radius:12px; padding:8px; }
-    h1 { margin:0 0 6px; font-size:20px; }
-    .meta { color:var(--muted); }
-    .label { color:var(--muted); width:120px; }
-    .val { font-weight:600; }
-    .actions { margin-top:16px; display:flex; gap:12px; }
-    .btn { border-radius:10px; padding:10px 14px; border:1px solid #e5e7eb; background:#111827; color:#fff; text-decoration:none; }
-    .btn.secondary { background:#fff; color:#111827; }
-    @media print {
-      .actions { display:none; }
-      .page { margin:0; }
-      .card { border:none; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
+  <head>
+    <meta charset="utf-8" />
+    <title>Worker #{{ worker.id }} — Print</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        margin: 24px;
+      }
+      .card {
+        border: 1px solid #ddd;
+        padding: 16px;
+        width: 340px;
+        border-radius: 12px;
+      }
+      h1 {
+        margin: 0 0 6px 0;
+        font-size: 20px;
+      }
+      .meta {
+        color: #666;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+      .qr {
+        margin-top: 12px;
+        width: 240px;
+        height: 240px;
+        object-fit: contain;
+      }
+      .actions {
+        margin-top: 16px;
+      }
+      @media print {
+        .actions { display: none; }
+        body { margin: 0; }
+      }
+    </style>
+  </head>
+  <body>
     <div class="card">
-      <div class="row">
-        <img class="qr" src="{{ url_for('worker_qr_png', worker_id=worker.id) }}" alt="QR">
-        <div>
-          <h1>{{ worker.name or "(no name)" }}</h1>
-          <div class="meta">Banswara Scanner · Token for ESP32 login</div>
-          <div style="margin-top:12px">
-            <div><span class="label">Department</span> <span class="val">{{ worker.department or "—" }}</span></div>
-            <div><span class="label">Token</span> <span class="val">{{ worker.token_id or "—" }}</span></div>
-          </div>
-          <div class="actions">
-            <a class="btn" href="#" onclick="window.print();return false;">Print</a>
-            <a class="btn secondary" href="{{ url_for('workers_page') }}">Back to Workers</a>
-          </div>
-        </div>
-      </div>
+      <h1>{{ worker.name }}</h1>
+      <div class="meta">ID: {{ worker.id }}</div>
+
+      <!-- ✅ Parameter name must match the route variable: wid -->
+      <img class="qr" src="{{ url_for('worker_qr_png', wid=worker.id) }}" alt="QR code">
+
+      {% if worker.qrcode %}
+        <div class="meta">Code: {{ worker.qrcode }}</div>
+      {% endif %}
     </div>
-  </div>
-</body>
+
+    <div class="actions">
+      <button onclick="window.print()">Print</button>
+      <a href="{{ url_for('workers_page') }}">Back to workers</a>
+    </div>
+  </body>
 </html>

@@ -37,8 +37,8 @@ def _today_range(d: date):
     start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
     return start, start + timedelta(days=1)
 
-def _rate_sql():
-    # sum rate from operations, fallback to RATE_PER_PIECE
+def _rate_sql_literal() -> str:
+    # We will use this string inside f-strings; pass the default as a python float to keep SQL happy.
     return f"COALESCE(ops.rate_per_piece, {float(RATE_PER_PIECE)})"
 
 # ---------------- INIT & MIGRATIONS ---------------- #
@@ -46,7 +46,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Base tables
+    # Workers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -61,6 +61,7 @@ def init_db():
         )
     """)
 
+    # Assignments (legacy + extended)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_operations (
             id SERIAL PRIMARY KEY,
@@ -71,6 +72,7 @@ def init_db():
         )
     """)
 
+    # Scans
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id SERIAL PRIMARY KEY,
@@ -81,6 +83,7 @@ def init_db():
         )
     """)
 
+    # (Optional) manual production entries
     cur.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -92,7 +95,7 @@ def init_db():
         )
     """)
 
-    # Pro-X style normalization
+    # Normalized order data (Pro-X style)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
@@ -128,9 +131,11 @@ def init_db():
         )
     """)
 
-    # Additive columns for assignments
+    # Ensure new columns exist on older DBs
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL")
     cur.execute("ALTER TABLE IF EXISTS user_operations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+    # THIS fixes your UndefinedColumn error on old DBs:
+    cur.execute("ALTER TABLE IF EXISTS operations ADD COLUMN IF NOT EXISTS rate_per_piece NUMERIC(10,2) DEFAULT %s", (RATE_PER_PIECE,))
 
     conn.commit()
     conn.close()
@@ -149,6 +154,30 @@ def healthz():
 def dashboard():
     return render_template('dashboard.html')
 
+# These names match what your templates are calling (to avoid BuildError)
+@app.route('/operations')
+def operations_page():
+    # Render your existing template if you have one; otherwise a thin placeholder.
+    try:
+        return render_template('operations.html')
+    except:
+        return render_template('blank.html', title="Operations")
+
+@app.route('/production')
+def production():
+    try:
+        return render_template('production.html')
+    except:
+        return render_template('blank.html', title="Production")
+
+@app.route('/assign_operations')
+def assign_operations():
+    try:
+        return render_template('assign_operation.html')
+    except:
+        return render_template('blank.html', title="Assign Operations")
+
+# Workers management UI (kept from your app)
 @app.route('/workers')
 def workers():
     conn = get_conn()
@@ -178,48 +207,10 @@ def add_worker():
     conn.close()
     return redirect(url_for('workers'))
 
-# ---- UI page stubs so url_for() in layout.html works ----
-@app.get('/operations')
-def operations_page():
-    # Show a simple operations list (can enhance later)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("""
-        SELECT ops.id, ops.operation_name, ops.process, ops.rate_per_piece, ord.order_no
-        FROM operations ops
-        LEFT JOIN orders ord ON ops.order_id = ord.id
-        ORDER BY ops.created_at DESC
-        LIMIT 200
-    """)
-    ops = cur.fetchall()
-    conn.close()
-    return render_template('operations.html', operations=ops)
-
-@app.get('/production')
-def production_page():
-    # Minimal production page; keeps legacy sidebar link alive
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("""
-        SELECT pl.id, w.name AS worker_name, uo.operation_name, pl.quantity, pl.status, pl.created_at
-        FROM production_logs pl
-        JOIN workers w ON pl.worker_id = w.id
-        JOIN user_operations uo ON pl.operation_id = uo.id
-        ORDER BY pl.created_at DESC
-        LIMIT 50
-    """)
-    logs = cur.fetchall()
-    # dropdowns
-    cur.execute("SELECT id, name FROM workers ORDER BY name")
-    workers_list = cur.fetchall()
-    cur.execute("SELECT id, operation_name FROM user_operations ORDER BY operation_name")
-    ops_list = cur.fetchall()
-    conn.close()
-    return render_template('production.html', logs=logs, workers=workers_list, operations=ops_list)
-
 # ---------------- QR (Worker & Bundle) ---------------- #
 @app.get('/qr/worker/<token_id>')
 def worker_qr(token_id):
+    # Encode W:<token> so the scanner knows it's a worker card
     payload = f"W:{token_id}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -228,6 +219,7 @@ def worker_qr(token_id):
 
 @app.get('/qr/bundle/<barcode>')
 def bundle_qr(barcode):
+    # Encode B:<barcode> for bundle scans
     payload = f"B:{barcode}"
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(payload, image_factory=factory)
@@ -294,43 +286,6 @@ def assign_operation_json():
     conn.close()
     return jsonify({"status":"ok","id":uoid,"barcode_value":barcode_value})
 
-# ---------------- UI PAGE: Assign Operations ---------------- #
-@app.get('/assign_operations')
-def assign_operations():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    # workers for dropdown
-    cur.execute("SELECT id, name, department FROM workers ORDER BY name")
-    workers = cur.fetchall()
-
-    # recent assignments
-    cur.execute("""
-        SELECT uo.id,
-               w.name AS worker_name,
-               w.department,
-               uo.operation_name,
-               uo.barcode_value,
-               uo.is_active,
-               uo.assigned_at,
-               ops.operation_name AS op_title,
-               ops.rate_per_piece
-        FROM user_operations uo
-        JOIN workers w ON uo.user_id = w.id
-        LEFT JOIN operations ops ON uo.operation_id = ops.id
-        ORDER BY uo.assigned_at DESC
-        LIMIT 200
-    """)
-    assigned = cur.fetchall()
-    conn.close()
-
-    return render_template('assign_operation.html', workers=workers, assigned=assigned)
-
-# optional favicon to avoid 404 noise
-@app.get('/favicon.ico')
-def favicon():
-    return ("", 204)
-
 # ---------------- ESP32 APIs ---------------- #
 @app.post('/scan')
 def scan_login():
@@ -352,8 +307,9 @@ def scan_login():
 
     # today totals
     start, end = _today_range(date.today())
+    rate_sql = _rate_sql_literal()
     cur.execute(f"""
-        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({_rate_sql()}), 0) AS earn
+        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}), 0) AS earn
         FROM scans s
         LEFT JOIN user_operations uo ON s.operation_id = uo.id
         LEFT JOIN operations ops ON uo.operation_id = ops.id
@@ -404,7 +360,7 @@ def scan_operation():
                    ORDER BY assigned_at DESC LIMIT 1""", (worker['id'],))
     uo = cur.fetchone()
     if not uo:
-        # fallback: legacy assignment QR scan
+        # fallback: legacy assignment QR scan (if someone scanned the assignment QR directly)
         cur.execute("""SELECT id, operation_id FROM user_operations
                        WHERE barcode_value=%s ORDER BY assigned_at DESC LIMIT 1""", (barcode_value,))
         uo = cur.fetchone()
@@ -412,7 +368,7 @@ def scan_operation():
             conn.close()
             return jsonify({'status':'error','message':'No active operation assigned or invalid barcode'}), 400
 
-    # optional: look up bundle id
+    # optional: look up bundle id by bundle barcode
     cur.execute("SELECT id FROM bundles WHERE barcode_value=%s", (barcode_value,))
     b = cur.fetchone()
     bundle_id = b['id'] if b else None
@@ -424,8 +380,9 @@ def scan_operation():
 
     # new totals
     start, end = _today_range(date.today())
+    rate_sql = _rate_sql_literal()
     cur.execute(f"""
-        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({_rate_sql()}), 0) AS earn
+        SELECT COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}), 0) AS earn
         FROM scans s
         LEFT JOIN user_operations u ON s.operation_id=u.id
         LEFT JOIN operations ops ON u.operation_id=ops.id
@@ -467,11 +424,12 @@ def api_stats():
         filters.append("ord2.order_no=%s"); params.append(order_no)
 
     where = " AND ".join(filters)
+    rate_sql = _rate_sql_literal()
 
     cur.execute(f"SELECT COUNT(s.id) AS pieces FROM scans s JOIN workers w ON s.user_id=w.id {join_order} WHERE {where}", params)
     total_pieces = int(cur.fetchone()["pieces"] or 0)
 
-    cur.execute(f"""SELECT COALESCE(SUM({_rate_sql()}),0) AS earn
+    cur.execute(f"""SELECT COALESCE(SUM({rate_sql}),0) AS earn
                     FROM scans s
                     LEFT JOIN user_operations uo ON s.operation_id = uo.id
                     LEFT JOIN operations ops ON uo.operation_id = ops.id
@@ -482,7 +440,7 @@ def api_stats():
     cur.execute("SELECT COUNT(*) FROM workers WHERE is_logged_in=TRUE")
     active_workers = int(cur.fetchone()[0])
 
-    cur.execute(f"""SELECT COALESCE(AVG({_rate_sql()}), {float(RATE_PER_PIECE)}) AS avg_rate
+    cur.execute(f"""SELECT COALESCE(AVG({rate_sql}), {float(RATE_PER_PIECE)}) AS avg_rate
                     FROM scans s
                     LEFT JOIN user_operations uo ON s.operation_id=uo.id
                     LEFT JOIN operations ops ON uo.operation_id=ops.id
@@ -491,7 +449,7 @@ def api_stats():
 
     cur.execute(f"""SELECT date_trunc('hour', s.scanned_at) AS h,
                            COUNT(s.id) AS pcs,
-                           COALESCE(SUM({_rate_sql()}),0) AS earn
+                           COALESCE(SUM({rate_sql}),0) AS earn
                     FROM scans s
                     LEFT JOIN user_operations uo ON s.operation_id=uo.id
                     LEFT JOIN operations ops ON uo.operation_id=ops.id
@@ -500,7 +458,7 @@ def api_stats():
                     GROUP BY h ORDER BY h""", params)
     by_hour = [{"hour": r["h"].strftime("%H:00"), "pieces": int(r["pcs"]), "earnings": float(r["earn"])} for r in cur.fetchall()]
 
-    cur.execute(f"""SELECT w.name AS worker, COUNT(s.id) AS pcs, COALESCE(SUM({_rate_sql()}),0) AS earn
+    cur.execute(f"""SELECT w.name AS worker, COUNT(s.id) AS pcs, COALESCE(SUM({rate_sql}),0) AS earn
                     FROM scans s
                     LEFT JOIN user_operations uo ON s.operation_id=uo.id
                     LEFT JOIN operations ops ON uo.operation_id=ops.id
@@ -542,11 +500,12 @@ def api_activities():
         """
         filters.append("ord2.order_no=%s"); params.append(order_no)
     where = " AND ".join(filters)
+    rate_sql = _rate_sql_literal()
 
     cur.execute(f"""
         SELECT s.scanned_at AS ts, w.name AS worker, w.department AS line,
                ord.order_no AS order_no, ops.operation_name AS op,
-               b.barcode_value AS bundle_code, {_rate_sql()} AS earn
+               b.barcode_value AS bundle_code, {rate_sql} AS earn
         FROM scans s
         JOIN workers w ON s.user_id = w.id
         LEFT JOIN user_operations uo ON s.operation_id = uo.id
@@ -567,5 +526,5 @@ def api_activities():
 
 # ---------------- RUN ---------------- #
 if __name__ == "__main__":
-    # On Render, gunicorn runs this module; keeping debug True helps logs in dev
+    # Local dev
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -2,114 +2,85 @@
 {% set title = "Dashboard" %}
 {% block content %}
 
+<div class="page-header">
+  <h1>Production Dashboard</h1>
+  <p>Live overview</p>
+</div>
+
 <div x-data="dashboard()" x-init="init()" class="grid gap-6">
-  <!-- Stat cards -->
-  <section class="grid md:grid-cols-3 gap-4">
-    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-      <div class="text-xs uppercase tracking-wide text-slate-500">Total Workers</div>
-      <div class="mt-2 text-3xl font-semibold" x-text="stats.total_workers ?? '—'"></div>
+
+  <section class="stats-grid">
+    <div class="stats-tile">
+      <div class="title">Total Workers</div>
+      <div class="value" x-text="stats.total_workers ?? '—'"></div>
     </div>
-    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-      <div class="text-xs uppercase tracking-wide text-slate-500">Active Today</div>
-      <div class="mt-2 text-3xl font-semibold" x-text="stats.active_today ?? '—'"></div>
+    <div class="stats-tile">
+      <div class="title">Active Today</div>
+      <div class="value" x-text="stats.active_today ?? '—'"></div>
     </div>
-    <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-      <div class="text-xs uppercase tracking-wide text-slate-500">Scans Today</div>
-      <div class="mt-2 text-3xl font-semibold flex items-center gap-2">
+    <div class="stats-tile">
+      <div class="title">Scans Today</div>
+      <div class="value">
         <span x-text="stats.scans_today ?? '—'"></span>
-        <span class="text-sm font-medium px-2 py-0.5 rounded-full bg-brand-50 text-brand-700"
-              x-show="stats.scans_today !== undefined">₹<span x-text="(stats.scans_today * rate).toFixed(0)"></span></span>
+        <span class="badge" x-show="stats.scans_today !== undefined">₹<span x-text="(stats.scans_today * rate).toFixed(0)"></span></span>
       </div>
+    </div>
+    <div class="stats-tile">
+      <div class="title">Live</div>
+      <div class="value">●</div>
     </div>
   </section>
 
-  <!-- Recent activity -->
-  <section class="bg-white rounded-2xl shadow-card border border-slate-100 overflow-hidden">
-    <div class="p-5 flex items-center justify-between">
-      <h2 class="font-semibold">Recent Activity</h2>
-      <div class="text-xs text-slate-500">Auto refresh in <span x-text="countdown"></span>s</div>
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2>Recent Activity</h2>
+      <div class="badge">Auto refresh in <span x-text="countdown"></span>s</div>
     </div>
-    <div class="overflow-auto">
-      <table class="min-w-full text-sm">
-        <thead class="bg-slate-50 text-slate-600">
+    <div class="table-container">
+      <table class="ui-table">
+        <thead>
           <tr>
-            <th class="text-left font-medium px-4 py-2">Time</th>
-            <th class="text-left font-medium px-4 py-2">Worker</th>
-            <th class="text-left font-medium px-4 py-2">Line</th>
-            <th class="text-left font-medium px-4 py-2">Operation</th>
-            <th class="text-left font-medium px-4 py-2">Barcode</th>
+            <th>Time</th><th>Worker</th><th>Line</th><th>Operation</th><th>Barcode</th>
           </tr>
         </thead>
         <tbody>
           <template x-for="row in rows" :key="row.ts + row.barcode">
-            <tr class="border-t border-slate-100 hover:bg-slate-50/60">
-              <td class="px-4 py-2" x-text="formatTime(row.ts)"></td>
-              <td class="px-4 py-2">
-                <div class="flex items-center gap-2">
-                  <div class="h-6 w-6 rounded-full bg-brand-100 text-brand-800 grid place-items-center text-xs font-semibold" x-text="avatar(row.worker)"></div>
-                  <div class="font-medium" x-text="row.worker || '(unknown)'"></div>
+            <tr>
+              <td x-text="formatTime(row.ts)"></td>
+              <td>
+                <div class="row">
+                  <span class="badge" x-text="avatar(row.worker)"></span>
+                  <span x-text="row.worker || '(unknown)'"></span>
                 </div>
               </td>
-              <td class="px-4 py-2" x-text="row.line || '-'"></td>
-              <td class="px-4 py-2">
-                <span class="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-700" x-text="row.operation_code || '-'"></span>
-              </td>
-              <td class="px-4 py-2 font-mono text-xs text-slate-600" x-text="row.barcode || '-'"></td>
+              <td x-text="row.line || '-'"></td>
+              <td><span class="badge" x-text="row.operation_code || '-'"></span></td>
+              <td style="font-family:ui-monospace" x-text="row.barcode || '-'"></td>
             </tr>
           </template>
-          <tr x-show="rows.length===0">
-            <td colspan="5" class="px-4 py-8 text-center text-slate-500">No scans yet today.</td>
-          </tr>
+          <tr x-show="rows.length===0"><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:16px">No scans yet today.</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 </div>
 
+<!-- AlpineJS logic kept from your original page -->
 <script>
 function dashboard(){
   return {
     rate: {{ (rate_per_piece|default(1.0)) }},
-    stats: {},
-    rows: [],
-    countdown: 60,
-    tickTimer: null,
-    async fetchStats(){
-      const r = await fetch(`/api/stats`);
-      if(r.ok) this.stats = await r.json();
-    },
-    async fetchRows(){
-      const r = await fetch(`/api/activities?limit=100`);
-      if(r.ok) this.rows = await r.json();
-    },
+    stats: {}, rows: [], countdown: 60, tickTimer: null,
+    async fetchStats(){ const r = await fetch(`/api/stats`); if(r.ok) this.stats = await r.json(); },
+    async fetchRows(){ const r = await fetch(`/api/activities?limit=100`); if(r.ok) this.rows = await r.json(); },
     loop(){
       this.countdown = 60;
-      this.tickTimer = setInterval(async ()=>{
-        this.countdown--;
-        if(this.countdown<=0){
-          await this.refresh();
-          this.countdown = 60;
-        }
-      }, 1000);
+      this.tickTimer = setInterval(async ()=>{ this.countdown--; if(this.countdown<=0){ await this.refresh(); this.countdown=60; } }, 1000);
     },
-    async refresh(){
-      await Promise.all([this.fetchStats(), this.fetchRows()]);
-    },
-    formatTime(ts){
-      if(!ts) return '-';
-      try{
-        const d = new Date(ts);
-        return d.toLocaleString();
-      }catch(e){ return ts; }
-    },
-    avatar(name){
-      const s = (name||'').trim().split(/\s+/);
-      return (s[0]?.[0]||'B') + (s[1]?.[0]||'S');
-    },
-    async init(){
-      await this.refresh();
-      this.loop();
-    }
+    async refresh(){ await Promise.all([this.fetchStats(), this.fetchRows()]); },
+    formatTime(ts){ if(!ts) return '-'; try{ const d=new Date(ts); return d.toLocaleString(); }catch(e){ return ts; } },
+    avatar(name){ const s=(name||'').trim().split(/\s+/); return (s[0]?.[0]||'B') + (s[1]?.[0]||'S'); },
+    async init(){ await this.refresh(); this.loop(); }
   }
 }
 </script>

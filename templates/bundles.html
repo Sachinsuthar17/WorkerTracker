@@ -1,0 +1,96 @@
+{% extends "layout.html" %}
+{% set title = "Bundle Management" %}
+{% block content %}
+
+<div class="page-header">
+  <h1>Bundle Management</h1>
+  <p>Create and track active bundles</p>
+</div>
+
+<!-- Generate bundle -->
+<section class="card">
+  <h2>Generate New Bundle</h2>
+  <div class="grid-3" style="margin-top:10px">
+    <div>
+      <label style="display:block; color:var(--text-secondary); font-size:12px">Production Order</label>
+      <select class="ui-select" name="order_id" id="order_id">
+        {% for o in orders or [] %}
+          <option value="{{ o.id }}">{{ o.order_no }} — {{ o.style }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="display:block; color:var(--text-secondary); font-size:12px">Color</label>
+      <select class="ui-select" id="color">
+        {% for c in colors or ['BLK3','BLK4','GREN','KHA1','LGR1','MDGR','NYYL'] %}
+          <option>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:12px">Size Range</label>
+        <input class="ui-input" id="size_range" placeholder="e.g. 036–050">
+      </div>
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:12px">Bundle Qty</label>
+        <input class="ui-input" id="bundle_qty" type="number" placeholder="50">
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px">
+    <button class="btn btn-primary" id="createBundleBtn">Generate Bundle</button>
+  </div>
+</section>
+
+<!-- Active Bundles -->
+<section class="card" style="margin-top:14px">
+  <h2>Active Bundles</h2>
+  <div class="grid-2" style="margin-top:10px">
+    {% for b in bundles or [] %}
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <strong>{{ b.barcode }}</strong>
+          <span class="badge">{{ b.status|default('IN_PROGRESS') }}</span>
+        </div>
+        <div style="margin-top:8px; color:var(--text-secondary); font-size:13px">
+          <div><b>Style:</b> {{ b.style }}</div>
+          <div><b>Color:</b> {{ b.color }} &nbsp; <b>Size:</b> {{ b.size_range }}</div>
+          <div><b>Quantity:</b> {{ b.quantity }} &nbsp; <b>Current Op:</b> {{ b.current_op or '-' }}</div>
+        </div>
+        <div style="margin-top:10px">
+          <div class="table-container">
+            <div style="height:6px; background:#0f366f">
+              <div style="height:6px; width: {{ b.progress or 0 }}%; background:var(--accent-color)"></div>
+            </div>
+          </div>
+          <div style="margin-top:6px; color:var(--text-secondary); font-size:12px">
+            {{ b.progress|default(0) }}% Complete • ₹{{ "%.2f"|format(b.earned|default(0.0)) }} earned
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn btn-secondary">QR</button>
+          <button class="btn btn-danger">Delete</button>
+        </div>
+      </div>
+    {% else %}
+      <div style="color:var(--text-secondary)">No active bundles.</div>
+    {% endfor %}
+  </div>
+</section>
+
+<script>
+document.getElementById('createBundleBtn')?.addEventListener('click', async () => {
+  const payload = {
+    order_id: document.getElementById('order_id')?.value || null,
+    color: document.getElementById('color')?.value || null,
+    size_range: document.getElementById('size_range')?.value || null,
+    bundle_qty: +(document.getElementById('bundle_qty')?.value || 0)
+  };
+  try{
+    const r = await fetch('/api/bundles', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(r.ok) location.reload();
+  }catch(e){ console.error(e); }
+});
+</script>
+{% endblock %}

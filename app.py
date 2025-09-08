@@ -9,6 +9,7 @@ from flask import (
 from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
+import psycopg2.errors
 import segno
 
 # -----------------------------------------------------------------------------
@@ -62,6 +63,17 @@ def ensure_schema() -> None:
                         scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
                 """)
+                # Global app state (single row, id=1) to remember the currently active worker
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS app_state (
+                        id INTEGER PRIMARY KEY,
+                        current_worker_id INTEGER NULL REFERENCES workers(id) ON DELETE SET NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                # Seed single row if missing
+                cur.execute("INSERT INTO app_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;")
+
                 # Indexes
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans (scanned_at DESC);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_worker_scanned ON scans (worker_id, scanned_at DESC);")
@@ -74,6 +86,25 @@ def today_bounds_utc() -> Tuple[datetime, datetime]:
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
+
+# Small helpers for current session
+def get_active_worker(conn) -> Optional[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT w.id, w.name, w.token_id, w.department
+            FROM app_state a
+            LEFT JOIN workers w ON w.id = a.current_worker_id
+            WHERE a.id = 1
+        """)
+        return cur.fetchone()
+
+def set_active_worker(conn, worker_id: Optional[int]) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE app_state
+            SET current_worker_id = %s, updated_at = NOW()
+            WHERE id = 1
+        """, (worker_id,))
 
 # -----------------------------------------------------------------------------
 # First-request guard
@@ -144,7 +175,11 @@ def workers_page():
                 ORDER BY created_at DESC
             """)
         workers = cur.fetchall()
-    return render_template("workers.html", workers=workers, search=q)
+
+        # Also show which worker is currently active (if any)
+        active = get_active_worker(conn)
+
+    return render_template("workers.html", workers=workers, search=q, active_worker=active)
 
 @app.post("/workers/create")
 def worker_create():
@@ -198,8 +233,22 @@ def worker_edit(wid: int):
 
 @app.post("/workers/<int:wid>/delete")
 def worker_delete(wid: int):
-    with db_connect() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM workers WHERE id=%s", (wid,))
+    try:
+        with db_connect() as conn, conn.cursor() as cur:
+            # If deleting the active worker, clear the session first
+            active = get_active_worker(conn)
+            if active and active.get("id") == wid:
+                set_active_worker(conn, None)
+
+            cur.execute("DELETE FROM workers WHERE id=%s", (wid,))
+    except psycopg2.errors.ForeignKeyViolation:
+        # Friendly message when other tables still reference this worker
+        flash("Cannot delete: this worker has production/scans linked. Delete those first.", "error")
+        return redirect(url_for("workers_page"))
+    except psycopg2.Error:
+        flash("Delete failed due to a database error.", "error")
+        return redirect(url_for("workers_page"))
+
     flash("Worker deleted.", "success")
     return redirect(url_for("workers_page"))
 
@@ -225,7 +274,8 @@ def worker_print(wid: int):
         row = cur.fetchone()
     if not row:
         return "Not found", 404
-    return render_template("worker_print.html", worker=row)
+    # NOTE: use print_qr.html (new template)
+    return render_template("print_qr.html", worker=row)
 
 # -----------------------------------------------------------------------------
 # Public API used by dashboard cards
@@ -244,11 +294,15 @@ def api_stats():
         """, (start, end))
         workers_today = (cur.fetchone() or {}).get("workers_today", 0)
 
+        # Add active worker name for the dashboard badge if you want it
+        active = get_active_worker(conn)
+
     earnings = float(pieces_today) * RATE_PER_PIECE
     return jsonify({
         "pieces_today": int(pieces_today),
         "workers_today": int(workers_today),
-        "earnings_today": round(earnings, 2)
+        "earnings_today": round(earnings, 2),
+        "active_worker": active["name"] if active else None
     })
 
 @app.get("/api/activities")
@@ -275,7 +329,7 @@ def api_activities():
     return jsonify({"items": items})
 
 # -----------------------------------------------------------------------------
-# ESP32 unified endpoint (/scan) — handles login AND piece save
+# ESP32 unified endpoint (/scan) — handles login toggle AND piece save
 # -----------------------------------------------------------------------------
 def _require_secret(payload: dict) -> bool:
     return payload.get("secret") == DEVICE_SECRET
@@ -291,13 +345,27 @@ def _normalize_token_or_name(payload: dict) -> Tuple[Optional[str], Optional[str
         token = token[2:]
     return (token or None), (name or None)
 
+def _find_worker_by_token_or_name(cur, token_id: Optional[str], name_guess: Optional[str]) -> Optional[dict]:
+    worker_row = None
+    if token_id:
+        cur.execute("SELECT id, name, token_id, department FROM workers WHERE token_id=%s", (token_id,))
+        worker_row = cur.fetchone()
+    if not worker_row and name_guess:
+        # Some old devices sent token in worker_name
+        cur.execute("SELECT id, name, token_id, department FROM workers WHERE token_id=%s", (name_guess,))
+        worker_row = cur.fetchone()
+        if not worker_row:
+            cur.execute("SELECT id, name, token_id, department FROM workers WHERE name=%s", (name_guess,))
+            worker_row = cur.fetchone()
+    return worker_row
+
 @app.post("/scan")
 def scan_unified():
     """
     Body:
       {
         secret: "...",
-        token_id: "W:ABC123" OR "ABC123"   # preferred
+        token_id: "W:ABC123" OR "ABC123"   # preferred for worker QR
         # or legacy:
         worker_name: "ABC123" or actual name
 
@@ -306,9 +374,11 @@ def scan_unified():
       }
 
     Behavior:
-      - If worker not found by token, tries legacy name lookup.
-      - If 'barcode' present: store a piece.
-      - Otherwise: login check only (just returns today's totals).
+      - If 'barcode' is absent: treat as worker QR scan -> toggle global active worker
+        (logout if same, switch if different).
+      - If 'barcode' is present: save a piece for the active worker if one is set; else
+        resolve worker from token/name and save.
+      - Always returns today's totals for the effective worker (if any).
     """
     payload = request.get_json(force=True, silent=True) or {}
     if not _require_secret(payload):
@@ -319,50 +389,74 @@ def scan_unified():
     if barcode.upper().startswith("B:"):
         barcode = barcode[2:]
 
-    # Find worker
-    with db_connect() as conn, conn.cursor() as cur:
-        worker_row = None
-        if token_id:
-            cur.execute("SELECT id, name, department FROM workers WHERE token_id=%s", (token_id,))
-            worker_row = cur.fetchone()
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            active = get_active_worker(conn)
 
-        # Legacy fallback: allow lookup by name
-        if not worker_row and name_guess:
-            # Try as token first (some devices sent token in worker_name previously)
-            cur.execute("SELECT id, name, department FROM workers WHERE token_id=%s", (name_guess,))
-            worker_row = cur.fetchone()
-            if not worker_row:
-                # Finally, try an exact name match
-                cur.execute("SELECT id, name, department FROM workers WHERE name=%s", (name_guess,))
-                worker_row = cur.fetchone()
+            # CASE 1: worker QR (toggle)
+            if not barcode:
+                # Need to find which worker QR was scanned
+                scanned_worker = _find_worker_by_token_or_name(cur, token_id, name_guess)
+                if not scanned_worker:
+                    return jsonify({"ok": False, "status": "error", "message": "Worker not found"}), 200
 
-        if not worker_row:
-            return jsonify({"ok": False, "status": "error", "message": "Worker not found"}), 200
+                if active and active["id"] == scanned_worker["id"]:
+                    # Same worker -> logout
+                    set_active_worker(conn, None)
+                    effective = None
+                    state = "logged_out"
+                else:
+                    # Switch to new worker
+                    set_active_worker(conn, scanned_worker["id"])
+                    effective = scanned_worker
+                    state = "logged_in"
 
-        wid = worker_row["id"]
+                # Compute today's totals for the effective worker (if any)
+                start, end = today_bounds_utc()
+                cnt = 0
+                if effective:
+                    cur.execute("""
+                        SELECT COUNT(*) AS cnt
+                        FROM scans
+                        WHERE worker_id=%s AND scanned_at >= %s AND scanned_at < %s
+                    """, (effective["id"], start, end))
+                    cnt = (cur.fetchone() or {}).get("cnt", 0)
 
-        # If barcode present -> save a piece
-        if barcode:
-            cur.execute("INSERT INTO scans (worker_id, barcode) VALUES (%s,%s)", (wid, barcode or None))
+                return jsonify({
+                    "ok": True,
+                    "status": state,
+                    "active_worker": (effective or {}),
+                    "today_pieces": int(cnt),
+                    "today_earn": round(float(cnt) * RATE_PER_PIECE, 2)
+                })
 
-        # Compute today's totals
-        start, end = today_bounds_utc()
-        cur.execute("""
-            SELECT COUNT(*) AS cnt
-            FROM scans
-            WHERE worker_id=%s AND scanned_at >= %s AND scanned_at < %s
-        """, (wid, start, end))
-        cnt = (cur.fetchone() or {}).get("cnt", 0)
+            # CASE 2: piece scan (barcode provided)
+            # Prefer the globally active worker, else resolve from request
+            effective = active
+            if not effective:
+                effective = _find_worker_by_token_or_name(cur, token_id, name_guess)
+                if not effective:
+                    return jsonify({"ok": False, "status": "error", "message": "No active worker and none resolved"}), 200
 
-    resp = {
-        "ok": True,
-        "status": "success",
-        "name": worker_row["name"],
-        "department": worker_row["department"],
-        "today_pieces": int(cnt),
-        "today_earn": round(float(cnt) * RATE_PER_PIECE, 2)
-    }
-    return jsonify(resp)
+            # Save the piece
+            cur.execute("INSERT INTO scans (worker_id, barcode) VALUES (%s,%s)", (effective["id"], barcode or None))
+
+            # Compute today's totals for this worker
+            start, end = today_bounds_utc()
+            cur.execute("""
+                SELECT COUNT(*) AS cnt
+                FROM scans
+                WHERE worker_id=%s AND scanned_at >= %s AND scanned_at < %s
+            """, (effective["id"], start, end))
+            cnt = (cur.fetchone() or {}).get("cnt", 0)
+
+            return jsonify({
+                "ok": True,
+                "status": "saved",
+                "active_worker": effective,
+                "today_pieces": int(cnt),
+                "today_earn": round(float(cnt) * RATE_PER_PIECE, 2)
+            })
 
 # -----------------------------------------------------------------------------
 # Main

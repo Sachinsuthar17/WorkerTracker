@@ -1,62 +1,116 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Worker #{{ worker.id }} — Print</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-      }
-      body {
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        margin: 24px;
-      }
-      .card {
-        border: 1px solid #ddd;
-        padding: 16px;
-        width: 340px;
-        border-radius: 12px;
-      }
-      h1 {
-        margin: 0 0 6px 0;
-        font-size: 20px;
-      }
-      .meta {
-        color: #666;
-        font-size: 12px;
-        margin-bottom: 8px;
-      }
-      .qr {
-        margin-top: 12px;
-        width: 240px;
-        height: 240px;
-        object-fit: contain;
-      }
-      .actions {
-        margin-top: 16px;
-      }
-      @media print {
-        .actions { display: none; }
-        body { margin: 0; }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>{{ worker.name }}</h1>
-      <div class="meta">ID: {{ worker.id }}</div>
+{% extends "layout.html" %}
+{% set title = "Print Worker QR" %}
+{% block content %}
+<style>
+  /* Print-friendly A6 card */
+  .badge {
+    max-width: 360px;
+    margin: 16px auto;
+    background: #0b1020;
+    border: 1px solid #24324a;
+    border-radius: 14px;
+    padding: 18px 18px 14px 18px;
+    color: #e8f0ff;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  }
+  .brand {
+    font-weight: 700;
+    letter-spacing: .5px;
+    font-size: 12px;
+    color: #7bdff6;
+  }
+  .name {
+    font-size: 22px;
+    font-weight: 800;
+    margin-top: 6px;
+    line-height: 1.15;
+  }
+  .meta {
+    margin-top: 4px;
+    color: #a6b2c7;
+    font-size: 13px;
+  }
+  .qr-wrap {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 14px;
+    align-items: center;
+  }
+  .qr {
+    background: #0f162b;
+    border: 1px solid #24324a;
+    border-radius: 12px;
+    padding: 8px;
+    text-align: center;
+  }
+  .token {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    color: #cfe3ff;
+    background: #10213a;
+    border: 1px dashed #2a4065;
+    border-radius: 8px;
+    padding: 8px 10px;
+    word-break: break-all;
+  }
+  .hint {
+    margin-top: 10px;
+    color: #8ea6c8;
+    font-size: 12px;
+  }
+  .actions {
+    display: flex;
+    gap: 10px;
+    margin: 18px auto 6px;
+    justify-content: center;
+  }
+  .btn {
+    appearance: none;
+    border: 1px solid #2a4065;
+    background: #0f1e38;
+    color: #d7e6ff;
+    padding: 8px 14px;
+    border-radius: 10px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn.primary { border-color:#3b82f6; background:#1e40af; }
+  .btn:hover { filter: brightness(1.1); }
+  @media print {
+    .actions, header, nav, footer { display: none !important; }
+    body { background: #fff; }
+    .badge {
+      box-shadow: none;
+      border: 1px solid #999;
+      color: #000;
+      background: #fff;
+    }
+    .qr { border-color:#ccc; background:#fff; }
+    .token { border-color:#bbb; background:#fff; color:#000; }
+  }
+</style>
 
-      <!-- ✅ Parameter name must match the route variable: wid -->
-      <img class="qr" src="{{ url_for('worker_qr_png', wid=worker.id) }}" alt="QR code">
+<div class="badge">
+  <div class="brand">{{ brand }}</div>
+  <div class="name">{{ worker.name }}</div>
+  <div class="meta">Department: <strong>{{ worker.department or "—" }}</strong></div>
 
-      {% if worker.qrcode %}
-        <div class="meta">Code: {{ worker.qrcode }}</div>
-      {% endif %}
+  <div class="qr-wrap">
+    <div class="qr">
+      <!-- Uses the existing PNG endpoint -->
+      <img src="{{ url_for('worker_qr_png', wid=worker.id) }}" alt="QR code" width="116" height="116" />
     </div>
-
-    <div class="actions">
-      <button onclick="window.print()">Print</button>
-      <a href="{{ url_for('workers_page') }}">Back to workers</a>
+    <div>
+      <div class="token">W:{{ worker.token_id }}</div>
+      <div class="hint">Scan this code on the ESP32 to log in/out automatically.</div>
     </div>
-  </body>
-</html>
+  </div>
+
+  <div class="actions no-print">
+    <button class="btn" onclick="window.history.back()">Back</button>
+    <button class="btn primary" onclick="window.print()">Print</button>
+    <a class="btn" href="{{ url_for('worker_qr_png', wid=worker.id) }}" download="worker_{{ worker.id }}_qr.png">Download PNG</a>
+  </div>
+</div>
+{% endblock %}

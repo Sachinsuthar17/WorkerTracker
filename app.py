@@ -346,17 +346,47 @@ def _normalize_token_or_name(payload: dict) -> Tuple[Optional[str], Optional[str
     return (token or None), (name or None)
 
 def _find_worker_by_token_or_name(cur, token_id: Optional[str], name_guess: Optional[str]) -> Optional[dict]:
-    worker_row = None
+    """
+    Perform a case‑insensitive lookup of a worker by token or name.  The ESP32
+    sends token values that may vary in case (e.g. "abc123", "ABC123").  Without
+    a normalised lookup the server would fail to recognise the worker when the
+    case does not match exactly.  This helper normalises both the stored and
+    provided tokens/names to lower‑case for comparison.
+
+    Args:
+        cur: A database cursor.
+        token_id: The token string (without the "W:" prefix) from the request, or None.
+        name_guess: A guessed worker name from legacy devices, or None.
+
+    Returns:
+        A dict containing the worker row, or None if not found.
+    """
+    worker_row: Optional[dict] = None
+
     if token_id:
-        cur.execute("SELECT id, name, token_id, department FROM workers WHERE token_id=%s", (token_id,))
+        # Case‑insensitive match on token_id
+        cur.execute(
+            "SELECT id, name, token_id, department FROM workers WHERE LOWER(token_id) = LOWER(%s)",
+            (token_id,),
+        )
         worker_row = cur.fetchone()
+
+    # Fall back to name_guess (legacy) if no worker found and a name guess is provided
     if not worker_row and name_guess:
-        # Some old devices sent token in worker_name
-        cur.execute("SELECT id, name, token_id, department FROM workers WHERE token_id=%s", (name_guess,))
+        # Some old devices sent the token in worker_name.  Try matching the token
+        cur.execute(
+            "SELECT id, name, token_id, department FROM workers WHERE LOWER(token_id) = LOWER(%s)",
+            (name_guess,),
+        )
         worker_row = cur.fetchone()
         if not worker_row:
-            cur.execute("SELECT id, name, token_id, department FROM workers WHERE name=%s", (name_guess,))
+            # Finally try matching by worker name (case‑insensitive)
+            cur.execute(
+                "SELECT id, name, token_id, department FROM workers WHERE LOWER(name) = LOWER(%s)",
+                (name_guess,),
+            )
             worker_row = cur.fetchone()
+
     return worker_row
 
 @app.post("/scan")

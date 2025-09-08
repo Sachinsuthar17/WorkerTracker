@@ -1,0 +1,87 @@
+{% extends "layout.html" %}
+{% set title = "Production Orders" %}
+{% block content %}
+
+<div class="page-header">
+  <h1>Production Orders</h1>
+  <p>Create and view the current order</p>
+</div>
+
+<section class="card">
+  <h2>Create New Production Order</h2>
+  <div class="grid-3" style="margin-top:10px">
+    <div>
+      <label style="display:block; color:var(--text-secondary); font-size:12px">Order Number</label>
+      <input class="ui-input" id="po_no" placeholder="e.g. 65001001140">
+    </div>
+    <div>
+      <label style="display:block; color:var(--text-secondary); font-size:12px">Style</label>
+      <select id="po_style" class="ui-select">
+        {% for s in styles or ['SAINTX MENS BLAZER'] %}<option>{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:12px">Buyer</label>
+        <input class="ui-input" id="po_buyer" placeholder="e.g. BANSWARA GARMENTS">
+      </div>
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:12px">Quantity</label>
+        <input class="ui-input" id="po_qty" type="number" placeholder="1119">
+      </div>
+    </div>
+  </div>
+  <div class="grid-2" style="margin-top:10px">
+    <div>
+      <label style="display:block; color:var(--text-secondary); font-size:12px">Delivery Date</label>
+      <input class="ui-input" id="po_date" placeholder="dd-mm-yyyy">
+    </div>
+    <div style="display:flex; align-items:end">
+      <button class="btn btn-primary" id="createPO">Create Order</button>
+    </div>
+  </div>
+</section>
+
+<section class="card" style="margin-top:14px">
+  <h2>Active Production Order</h2>
+  {% if active %}
+  <div style="margin-top:6px; color:var(--text-secondary)">
+    <div class="grid-3">
+      <div><b>Order No:</b> {{ active.order_no }}</div>
+      <div><b>Style:</b> {{ active.style }}</div>
+      <div><b>Buyer:</b> {{ active.buyer }}</div>
+      <div><b>Quantity:</b> {{ active.quantity }} pcs</div>
+      <div><b>Delivery:</b> {{ active.delivery }}</div>
+    </div>
+    <div style="margin-top:12px">
+      <div class="row" style="gap:8px; flex-wrap:wrap">
+        {% for c in active.colors or [] %}
+        <div class="card" style="padding:10px 12px">
+          <div style="font-weight:700">{{ c.code }}</div>
+          <div class="text-xs" style="color:var(--text-secondary)">{{ c.qty }} pcs</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+    <div style="color:var(--text-secondary)">No active order.</div>
+  {% endif %}
+</section>
+
+<script>
+document.getElementById('createPO')?.addEventListener('click', async () => {
+  const payload = {
+    order_no: document.getElementById('po_no')?.value,
+    style: document.getElementById('po_style')?.value,
+    buyer: document.getElementById('po_buyer')?.value,
+    quantity: +(document.getElementById('po_qty')?.value || 0),
+    delivery: document.getElementById('po_date')?.value
+  };
+  try{
+    const r = await fetch('/api/orders', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(r.ok) location.reload();
+  }catch(e){ console.error(e); }
+});
+</script>
+{% endblock %}

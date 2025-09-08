@@ -1,9 +1,8 @@
 flask==2.3.3
 flask-cors==4.0.0
+segno==1.5.2
+pandas==2.0.3
+openpyxl==3.1.2
 gunicorn==21.2.0
-qrcode==7.4.2
-segno
-psycopg2-binary
-
-
-
+werkzeug==2.3.7
+Pillow==10.0.0

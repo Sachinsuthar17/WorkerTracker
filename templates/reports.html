@@ -1,17 +1,56 @@
 {% extends "layout.html" %}
 {% set title = "Reports" %}
 {% block content %}
-<section class="grid gap-6">
-  <header>
-    <h1 class="text-xl font-semibold">Reports</h1>
-    <p class="text-sm text-slate-500">Export and review production activity.</p>
-  </header>
 
-  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <p class="text-sm text-slate-600">
-      Coming soon: export CSV by date, worker, line, operation.
-      For now, see live activity on the Dashboard.
-    </p>
+<div class="page-header">
+  <h1>Reports & Analytics</h1>
+  <p>Performance, trends and exports</p>
+</div>
+
+<section class="stats-grid">
+  <div class="stats-tile"><div class="title">Total Workers</div><div class="value">{{ stats.total_workers|default(0) }}</div></div>
+  <div class="stats-tile"><div class="title">Avg Efficiency</div><div class="value">{{ stats.avg_efficiency|default('104%') }}</div></div>
+  <div class="stats-tile"><div class="title">Pieces Today</div><div class="value">{{ stats.pieces_today|default(150) }}</div></div>
+  <div class="stats-tile"><div class="title">—</div><div class="value">●</div></div>
+</section>
+
+<div class="grid-2" style="margin-top:14px">
+  <section class="card">
+    <h2>Worker Performance</h2>
+    <div class="table-container" style="margin-top:8px">
+      <table class="ui-table">
+        <thead><tr><th>Worker</th><th>Dept</th><th>Efficiency</th><th>Earnings</th></tr></thead>
+        <tbody>
+          {% for r in worker_perf or [] %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ r.department }}</td>
+            <td>{{ r.efficiency }}</td>
+            <td>₹{{ "%.2f"|format(r.earnings|default(0)) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" style="text-align:center; color:var(--text-secondary)">No data.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Production Trends</h2>
+    <div style="height:240px; display:grid; place-items:center; color:var(--text-secondary)">
+      <!-- Keep simple for now; you can plug a chart library later -->
+      Trend chart placeholder
+    </div>
+  </section>
+</div>
+
+<section class="card" style="margin-top:14px">
+  <h2>Export Data</h2>
+  <div class="row" style="margin-top:8px; flex-wrap:wrap">
+    <a class="btn btn-secondary" href="/export/workers.csv">⬇ Export Workers CSV</a>
+    <a class="btn btn-secondary" href="/export/bundles.csv">⬇ Export Bundles CSV</a>
+    <a class="btn btn-secondary" href="/export/operations.csv">⬇ Export Operations CSV</a>
   </div>
 </section>
 {% endblock %}

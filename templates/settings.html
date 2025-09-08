@@ -1,18 +1,61 @@
 {% extends "layout.html" %}
 {% set title = "Settings" %}
 {% block content %}
-<section class="grid gap-6 max-w-2xl">
-  <header>
-    <h1 class="text-xl font-semibold">Settings</h1>
-    <p class="text-sm text-slate-500">Environment-driven settings (change on Render → Environment).</p>
-  </header>
 
-  <div class="bg-white rounded-2xl p-5 shadow-card border border-slate-100">
-    <ul class="text-sm text-slate-700 space-y-2">
-      <li><span class="font-medium">DEVICE_SECRET</span> – used by ESP32 to authenticate.</li>
-      <li><span class="font-medium">RATE_PER_PIECE</span> – default <span class="px-1 rounded bg-slate-100">₹{{ "%.2f"|format(rate_per_piece) }}</span></li>
+<div class="page-header">
+  <h1>System Settings</h1>
+  <p>Environment + Appearance</p>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Environment (from Render)</h2>
+    <ul style="margin:8px 0 0; padding:0 0 0 18px; color:var(--text-secondary)">
+      <li><strong>DEVICE_SECRET</strong> – used by ESP32 to authenticate.</li>
+      <li><strong>RATE_PER_PIECE</strong> – default <span class="badge">₹{{ "%.2f"|format(rate_per_piece) }}</span></li>
     </ul>
-    <p class="text-xs text-slate-500 mt-3">Update these variables in Render → Environment → Redeploy.</p>
-  </div>
-</section>
+    <p style="margin-top:12px; color:var(--text-muted)">Change these in Render → Environment → Redeploy.</p>
+  </section>
+
+  <section class="card">
+    <h2>Theme Customisation</h2>
+    <div class="row" style="margin:12px 0">
+      <label>Accent Colour</label>
+      <input type="color" id="accentColor" class="ui-input" style="width:120px; padding:4px">
+      <button type="button" id="resetColor" class="btn btn-secondary">Reset</button>
+    </div>
+    <p style="color:var(--text-muted)">Your choice is saved in this browser and applied across all pages.</p>
+  </section>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const picker = document.getElementById('accentColor');
+    const reset  = document.getElementById('resetColor');
+    const el     = document.documentElement;
+
+    // compute darker shade for hover
+    const darken = (hex, f=0.7) => '#'+hex.replace('#','')
+      .match(/.{1,2}/g).map(h=>('0'+Math.max(0,Math.min(255,Math.floor(parseInt(h,16)*f))).toString(16)).slice(-2)).join('');
+
+    // load existing
+    const saved = localStorage.getItem('accentColor');
+    picker.value = saved || getComputedStyle(el).getPropertyValue('--accent-color').trim() || '#3b82f6';
+
+    const apply = (c) => {
+      el.style.setProperty('--accent-color', c);
+      el.style.setProperty('--accent-color-dark', darken(c, 0.7));
+    };
+
+    picker.addEventListener('change', () => {
+      localStorage.setItem('accentColor', picker.value);
+      apply(picker.value);
+    });
+    reset.addEventListener('click', () => {
+      localStorage.removeItem('accentColor');
+      picker.value = '#3b82f6';
+      apply('#3b82f6');
+    });
+  });
+</script>
 {% endblock %}

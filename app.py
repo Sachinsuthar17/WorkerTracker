@@ -1,50 +1,25 @@
 import os
 import io
 import csv
-import sqlite3
 from datetime import datetime, date
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, flash
 import qrcode  # make sure it's in requirements.txt
 
-# ---------------- Writable DB Path Resolution ---------------- #
-def resolve_db_path():
-    # 1) Explicit override
-    url = os.getenv("DATABASE_URL")
-    if url:
-        target = url
-    else:
-        # 2) Preferred persistent path on Render
-        candidate_dirs = ["/opt/render/data"]
-        # 3) App folder (usually /opt/render/project/src); changes are ephemeral but writable
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate_dirs.append(app_dir)
-        # 4) Fallback to /tmp
-        candidate_dirs.append("/tmp")
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
-        target = None
-        for d in candidate_dirs:
-            try:
-                os.makedirs(d, exist_ok=True)
-                target = os.path.join(d, "factory.db")
-                break
-            except Exception:
-                continue
+# ---------------- Database URL ---------------- #
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-        if target is None:
-            # Absolute last resort: current working directory
-            target = os.path.abspath("factory.db")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-    # Ensure directory exists for the chosen target
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
-    except Exception:
-        # If even that fails, drop to /tmp
-        target = "/tmp/factory.db"
-        os.makedirs("/tmp", exist_ok=True)
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL is not set. Add it in Render dashboard.")
 
-    return target
-
-DB_PATH = resolve_db_path()
+# SQLAlchemy engine + session
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
 AUTO_CREATE_UNKNOWN = os.getenv("AUTO_CREATE", "1") == "1"
@@ -54,38 +29,31 @@ app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
 # ---------------- DB Helpers ---------------- #
 
-def get_conn():
-    # Re-ensure directory exists before opening
-    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 def query(sql, args=(), one=False):
-    with get_conn() as conn:
-        cur = conn.execute(sql, args)
-        rv = cur.fetchall()
-        cur.close()
-    return (rv[0] if rv else None) if one else rv
+    with SessionLocal() as session:
+        result = session.execute(text(sql), args)
+        rows = result.mappings().all()
+        return rows[0] if one and rows else (rows if not one else None)
 
 def execute(sql, args=()):
-    with get_conn() as conn:
-        cur = conn.execute(sql, args)
-        conn.commit()
-        last_id = cur.lastrowid
-        cur.close()
-        return last_id
+    with SessionLocal() as session:
+        result = session.execute(text(sql), args)
+        session.commit()
+        try:
+            return result.lastrowid
+        except Exception:
+            return None
 
 def get_settings():
     return query("SELECT * FROM settings WHERE id=1", one=True)
 
 def ensure_basics():
-    # Import here to avoid circulars
+    """Run schema creation if not exists."""
     from db_setup import init_db
-    print(f"🔧 Using DB at: {DB_PATH}")
-    init_db(DB_PATH)
+    print(f"🔧 Using Postgres DB at: {DATABASE_URL}")
+    init_db(DATABASE_URL)
 
-# Initialize DB at startup
+# Initialize DB schema at startup
 ensure_basics()
 
 # ---------------- QR Code ---------------- #
@@ -111,15 +79,14 @@ def dashboard():
     total_workers = query("SELECT COUNT(*) AS c FROM users", one=True)["c"]
     bundles_active = query("SELECT COUNT(*) AS c FROM bundles", one=True)["c"]
     scans_today = query(
-        "SELECT COUNT(*) AS c FROM scans "
-        "WHERE DATE(timestamp, 'localtime') = DATE('now','localtime')",
+        "SELECT COUNT(*) AS c FROM scans WHERE DATE(timestamp) = CURRENT_DATE",
         one=True)["c"]
 
     total_std_today = query("""
         SELECT COALESCE(SUM(o.std_min),0) AS mins
         FROM scans s 
         JOIN operations o ON s.operation_id = o.id
-        WHERE DATE(s.timestamp, 'localtime') = DATE('now','localtime')
+        WHERE DATE(s.timestamp) = CURRENT_DATE
     """, one=True)["mins"]
 
     base_rate = get_settings()["base_rate_per_min"]
@@ -141,7 +108,7 @@ def dashboard():
         FROM scans s
         JOIN users u ON u.id = s.worker_id
         JOIN operations o ON o.id = s.operation_id
-        WHERE DATE(s.timestamp, 'localtime') = DATE('now','localtime')
+        WHERE DATE(s.timestamp) = CURRENT_DATE
         GROUP BY u.name
         ORDER BY pieces DESC
         LIMIT 10
@@ -171,11 +138,12 @@ def users():
         try:
             execute(
                 "INSERT INTO users(worker_code, name, department, skill, hourly_rate, qr_code) "
-                "VALUES (?,?,?,?,?,?)",
-                (worker_code, name, department, skill, hourly_rate, worker_code)
+                "VALUES (:worker_code, :name, :department, :skill, :hourly_rate, :qr_code)",
+                dict(worker_code=worker_code, name=name, department=department,
+                     skill=skill, hourly_rate=hourly_rate, qr_code=worker_code)
             )
             flash("Worker added", "success")
-        except sqlite3.IntegrityError:
+        except Exception:
             flash(f"Worker code already exists: {worker_code}", "danger")
 
         return redirect(url_for("users"))
@@ -185,13 +153,13 @@ def users():
 
 @app.route("/users/<int:uid>/delete", methods=["POST"])
 def users_delete(uid):
-    execute("DELETE FROM users WHERE id = ?", (uid,))
+    execute("DELETE FROM users WHERE id = :id", {"id": uid})
     flash("Worker deleted", "info")
     return redirect(url_for("users"))
 
 @app.route("/qrcode/worker/<int:uid>.png")
 def worker_qr(uid):
-    row = query("SELECT worker_code FROM users WHERE id=?", (uid,), one=True)
+    row = query("SELECT worker_code FROM users WHERE id=:id", {"id": uid}, one=True)
     if not row:
         return ("not found", 404)
     return send_file(io.BytesIO(generate_qr_png(row["worker_code"])), mimetype="image/png")
@@ -210,11 +178,13 @@ def bundles_page():
         try:
             execute(
                 "INSERT INTO bundles(bundle_code, style, color, size_range, quantity, current_op, qr_code) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (bundle_code, style, color, size_range, quantity, None, bundle_code)
+                "VALUES (:bundle_code, :style, :color, :size_range, :quantity, :current_op, :qr_code)",
+                dict(bundle_code=bundle_code, style=style, color=color,
+                     size_range=size_range, quantity=quantity,
+                     current_op=None, qr_code=bundle_code)
             )
             flash("Bundle added", "success")
-        except sqlite3.IntegrityError:
+        except Exception:
             flash(f"Bundle already exists: {bundle_code}", "danger")
 
         return redirect(url_for("bundles_page"))
@@ -224,7 +194,7 @@ def bundles_page():
 
 @app.route("/qrcode/bundle/<int:bid>.png")
 def bundle_qr(bid):
-    row = query("SELECT bundle_code FROM bundles WHERE id=?", (bid,), one=True)
+    row = query("SELECT bundle_code FROM bundles WHERE id=:id", {"id": bid}, one=True)
     if not row:
         return ("not found", 404)
     return send_file(io.BytesIO(generate_qr_png(row["bundle_code"])), mimetype="image/png")
@@ -241,16 +211,17 @@ def operations_page():
 
         try:
             execute(
-                "INSERT INTO operations(op_no, description, section, std_min) VALUES (?,?,?,?)",
-                (op_no, description, section, std_min)
+                "INSERT INTO operations(op_no, description, section, std_min) "
+                "VALUES (:op_no, :description, :section, :std_min)",
+                dict(op_no=op_no, description=description, section=section, std_min=std_min)
             )
             flash("Operation added", "success")
-        except sqlite3.IntegrityError:
+        except Exception:
             flash(f"Operation already exists: {op_no}", "danger")
 
         return redirect(url_for("operations_page"))
 
-    rows = query("SELECT * FROM operations ORDER BY CAST(op_no AS INTEGER) ASC")
+    rows = query("SELECT * FROM operations ORDER BY op_no ASC")
     return render_template("operations.html", operations=rows)
 
 # ---------------- Tasks ---------------- #
@@ -261,8 +232,8 @@ def assign_task():
         worker_id = int(request.form.get("worker_id"))
         description = request.form.get("description", "").strip()
         execute(
-            "INSERT INTO tasks(worker_id, description, status) VALUES (?,?, 'OPEN')",
-            (worker_id, description)
+            "INSERT INTO tasks(worker_id, description, status) VALUES (:worker_id, :description, 'OPEN')",
+            dict(worker_id=worker_id, description=description)
         )
         flash("Task assigned", "success")
         return redirect(url_for("assign_task"))
@@ -278,7 +249,7 @@ def assign_task():
 
 @app.route("/tasks/<int:tid>/complete", methods=["POST"])
 def complete_task(tid):
-    execute("UPDATE tasks SET status='DONE' WHERE id=?", (tid,))
+    execute("UPDATE tasks SET status='DONE' WHERE id=:id", {"id": tid})
     flash("Task completed", "info")
     return redirect(url_for("assign_task"))
 
@@ -295,20 +266,20 @@ def reports():
         FROM scans s 
         JOIN users u ON u.id = s.worker_id
         JOIN operations o ON o.id = s.operation_id
-        WHERE DATE(s.timestamp, 'localtime') BETWEEN ? AND ?
+        WHERE DATE(s.timestamp) BETWEEN :start AND :end
         GROUP BY u.name
         ORDER BY pieces DESC
-    """, (start, end))
+    """, {"start": start, "end": end})
 
     bundles = query("""
         SELECT b.bundle_code, COUNT(*) AS pieces, ROUND(SUM(o.std_min),2) AS std_min
         FROM scans s
         JOIN bundles b ON b.id = s.bundle_id
         JOIN operations o ON o.id = s.operation_id
-        WHERE DATE(s.timestamp, 'localtime') BETWEEN ? AND ?
+        WHERE DATE(s.timestamp) BETWEEN :start AND :end
         GROUP BY b.bundle_code
         ORDER BY pieces DESC
-    """, (start, end))
+    """, {"start": start, "end": end})
 
     return render_template("reports.html",
                            rows=rows, bundles=bundles,
@@ -368,36 +339,37 @@ def scan():
         return jsonify({"ok": False, "error": "worker_qr, bundle_qr, operation required"}), 400
 
     # Worker
-    w = query("SELECT id FROM users WHERE worker_code=?", (worker_qr,), one=True)
+    w = query("SELECT id FROM users WHERE worker_code=:code", {"code": worker_qr}, one=True)
     if not w and AUTO_CREATE_UNKNOWN:
-        wid = execute("INSERT INTO users(worker_code, name, qr_code) VALUES (?,?,?)",
-                      (worker_qr, worker_qr, worker_qr))
+        wid = execute("INSERT INTO users(worker_code, name, qr_code) VALUES (:c,:n,:q)",
+                      {"c": worker_qr, "n": worker_qr, "q": worker_qr})
     elif not w:
         return jsonify({"ok": False, "error": f"Unknown worker {worker_qr}"}), 404
     else:
         wid = w["id"]
 
     # Bundle
-    b = query("SELECT id FROM bundles WHERE bundle_code=?", (bundle_qr,), one=True)
+    b = query("SELECT id FROM bundles WHERE bundle_code=:code", {"code": bundle_qr}, one=True)
     if not b and AUTO_CREATE_UNKNOWN:
-        bid = execute("INSERT INTO bundles(bundle_code, qr_code) VALUES (?,?)",
-                      (bundle_qr, bundle_qr))
+        bid = execute("INSERT INTO bundles(bundle_code, qr_code) VALUES (:c,:q)",
+                      {"c": bundle_qr, "q": bundle_qr})
     elif not b:
         return jsonify({"ok": False, "error": f"Unknown bundle {bundle_qr}"}), 404
     else:
         bid = b["id"]
 
     # Operation
-    o = query("SELECT id FROM operations WHERE op_no=?", (operation,), one=True)
+    o = query("SELECT id FROM operations WHERE op_no=:op", {"op": operation}, one=True)
     if not o and AUTO_CREATE_UNKNOWN:
-        oid = execute("INSERT INTO operations(op_no, description, std_min) VALUES (?,?,?)",
-                      (operation, "AUTO", 0.5))
+        oid = execute("INSERT INTO operations(op_no, description, std_min) VALUES (:o,:d,:m)",
+                      {"o": operation, "d": "AUTO", "m": 0.5})
     elif not o:
         return jsonify({"ok": False, "error": f"Unknown operation {operation}"}), 404
     else:
         oid = o["id"]
 
-    execute("INSERT INTO scans(worker_id, bundle_id, operation_id) VALUES (?,?,?)", (wid, bid, oid))
+    execute("INSERT INTO scans(worker_id, bundle_id, operation_id) VALUES (:w,:b,:o)",
+            {"w": wid, "b": bid, "o": oid})
     return jsonify({"ok": True})
 
 @app.route("/api/health")

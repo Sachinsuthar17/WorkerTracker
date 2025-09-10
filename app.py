@@ -1,10 +1,9 @@
-# app.py
 import os
 import io
 import csv
 from datetime import datetime, date
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, flash
-import qrcode  # make sure it's in requirements.txt
+import qrcode
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -31,7 +30,7 @@ app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
 # ---------------- DB Helpers ---------------- #
 def query(sql, args=None, one=False):
-    """Run a SELECT and return list of mapping rows (or one)."""
+    """Run a SELECT and return list of dict rows (or one)."""
     args = args or {}
     with SessionLocal() as session:
         result = session.execute(text(sql), args)
@@ -40,18 +39,14 @@ def query(sql, args=None, one=False):
 
 def execute(sql, args=None, expect_id=False):
     """
-    Run an INSERT/UPDATE/DELETE. If expect_id=True, the SQL MUST include 'RETURNING id'
-    and this returns that id; otherwise returns affected rowcount.
+    Run an INSERT/UPDATE/DELETE.
+    - If expect_id=True, the SQL MUST include 'RETURNING id' and this returns that id.
+    - Otherwise returns affected rowcount.
     """
     args = args or {}
     with SessionLocal() as session:
         result = session.execute(text(sql), args)
-        ret = None
-        if expect_id:
-            # expecting a single row, single column id
-            ret = result.scalar()
-        else:
-            ret = result.rowcount
+        ret = result.scalar() if expect_id else result.rowcount
         session.commit()
         return ret
 
@@ -60,7 +55,7 @@ def get_settings():
 
 def ensure_basics():
     """Create schema if missing."""
-    from db_setup import init_db  # your Postgres-aware schema creator
+    from db_setup import init_db
     print(f"🔧 Using Postgres DB at: {DATABASE_URL}")
     init_db(DATABASE_URL)
 
@@ -99,8 +94,8 @@ def dashboard():
         WHERE DATE(s.timestamp) = CURRENT_DATE
     """, one=True)["mins"]
 
-    base_rate = get_settings()["base_rate_per_min"]
-    earnings_today = round(float(total_std_today) * float(base_rate), 2)
+    base_rate = float(get_settings()["base_rate_per_min"])
+    earnings_today = round(float(total_std_today) * base_rate, 2)
 
     recent = query("""
         SELECT s.id, s.timestamp, u.name AS worker, b.bundle_code AS bundle, 

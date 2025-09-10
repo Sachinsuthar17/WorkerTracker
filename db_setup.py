@@ -1,25 +1,45 @@
 import os
 import sqlite3
 
-# ---------------- Database Path ---------------- #
-default_data_dir = '/opt/render/data'
-try:
-    os.makedirs(default_data_dir, exist_ok=True)
-except Exception:
-    default_data_dir = '/tmp'
-    os.makedirs(default_data_dir, exist_ok=True)
+# Allow external callers to pass a specific DB path; otherwise resolve here.
+def _resolve_db_path():
+    url = os.getenv("DATABASE_URL")
+    if url:
+        target = url
+    else:
+        candidate_dirs = ["/opt/render/data",
+                          os.path.dirname(os.path.abspath(__file__)),
+                          "/tmp"]
+        target = None
+        for d in candidate_dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+                target = os.path.join(d, "factory.db")
+                break
+            except Exception:
+                continue
+        if target is None:
+            target = os.path.abspath("factory.db")
 
-default_db = os.path.join(default_data_dir, 'factory.db')
-DB_PATH = os.getenv("DATABASE_URL", default_db)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+    except Exception:
+        target = "/tmp/factory.db"
+        os.makedirs("/tmp", exist_ok=True)
+    return target
 
-def init_db():
-    # ✅ Ensure the DB directory always exists
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+# Exposed DB_PATH for scripts that import this file directly
+DB_PATH = _resolve_db_path()
 
-    conn = sqlite3.connect(DB_PATH)
+def init_db(db_path: str | None = None):
+    """Create all tables and defaults if they do not exist."""
+    path = db_path or DB_PATH
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+    conn = sqlite3.connect(path)
     c = conn.cursor()
 
-    # ---------------- Settings ---------------- #
+    # Settings
     c.execute('''CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         base_rate_per_min REAL DEFAULT 0.50,
@@ -27,7 +47,7 @@ def init_db():
         quality_target INTEGER DEFAULT 95
     )''')
 
-    # ---------------- Users (workers) ---------------- #
+    # Users
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_code TEXT UNIQUE NOT NULL,
@@ -38,7 +58,7 @@ def init_db():
         qr_code TEXT UNIQUE
     )''')
 
-    # ---------------- Bundles ---------------- #
+    # Bundles
     c.execute('''CREATE TABLE IF NOT EXISTS bundles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bundle_code TEXT UNIQUE NOT NULL,
@@ -50,7 +70,7 @@ def init_db():
         qr_code TEXT UNIQUE
     )''')
 
-    # ---------------- Operations (OB) ---------------- #
+    # Operations
     c.execute('''CREATE TABLE IF NOT EXISTS operations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         op_no TEXT UNIQUE NOT NULL,
@@ -59,7 +79,7 @@ def init_db():
         std_min REAL DEFAULT 0
     )''')
 
-    # ---------------- Scans ---------------- #
+    # Scans
     c.execute('''CREATE TABLE IF NOT EXISTS scans (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_id INTEGER NOT NULL,
@@ -71,7 +91,7 @@ def init_db():
         FOREIGN KEY(operation_id) REFERENCES operations(id)
     )''')
 
-    # ---------------- Tasks ---------------- #
+    # Tasks
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_id INTEGER NOT NULL,
@@ -81,15 +101,13 @@ def init_db():
         FOREIGN KEY(worker_id) REFERENCES users(id)
     )''')
 
-    # ---------------- Defaults & Indexes ---------------- #
-    # Ensure exactly one settings row exists
+    # Defaults & Indexes
     c.execute("""
         INSERT OR IGNORE INTO settings
         (id, base_rate_per_min, efficiency_target, quality_target)
         VALUES (1, 0.50, 100, 95)
     """)
 
-    # Helpful indexes for performance
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans(worker_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_bundle ON scans(bundle_id)')
@@ -99,5 +117,5 @@ def init_db():
     conn.close()
 
 if __name__ == "__main__":
-    init_db()
+    init_db(DB_PATH)
     print("✅ Database initialized at", DB_PATH)

@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-# Pick a writable directory for Render or local dev
+# ---------------- Database Path ---------------- #
 default_data_dir = '/opt/render/data'
 try:
     os.makedirs(default_data_dir, exist_ok=True)
@@ -10,7 +10,7 @@ except Exception:
     os.makedirs(default_data_dir, exist_ok=True)
 
 default_db = os.path.join(default_data_dir, 'factory.db')
-DB_PATH = os.getenv('DATABASE_URL', default_db)
+DB_PATH = os.getenv("DATABASE_URL", default_db)
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)

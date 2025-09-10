@@ -1,37 +1,80 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Reports</h1>
-<form method="get" class="form-inline">
-  <label>From</label>
-  <input type="date" name="start" value="{{ start }}">
-  <label>To</label>
-  <input type="date" name="end" value="{{ end }}">
-  <button type="submit">Apply</button>
-  <a class="btn" href="{{ url_for('export_scans_csv') }}">Export Scans CSV</a>
+
+<!-- Flash messages -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="mt-3">
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
+<form method="get" class="row g-2 mb-3 align-items-end">
+  <div class="col-auto">
+    <label class="form-label">From</label>
+    <input class="form-control" type="date" name="start" value="{{ start }}">
+  </div>
+  <div class="col-auto">
+    <label class="form-label">To</label>
+    <input class="form-control" type="date" name="end" value="{{ end }}">
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-primary" type="submit">Apply</button>
+    <a class="btn btn-secondary" href="{{ url_for('export_scans_csv') }}">Export CSV</a>
+  </div>
 </form>
 
-<div class="grid-2">
-  <section>
+<div class="row">
+  <!-- Worker Report -->
+  <div class="col-md-6">
     <h2>By Worker</h2>
-    <table class="table">
-      <thead><tr><th>Worker</th><th>Pieces</th><th>Std Min</th><th>Earnings</th></tr></thead>
+    <table class="table table-bordered table-striped table-sm">
+      <thead>
+        <tr>
+          <th>Worker</th>
+          <th>Pieces</th>
+          <th>Std Min</th>
+          <th>Earnings</th>
+        </tr>
+      </thead>
       <tbody>
         {% for r in rows %}
-        <tr><td>{{ r.worker }}</td><td>{{ r.pieces }}</td><td>{{ r.std_min }}</td><td>${{ '%.2f' % r.earnings }}</td></tr>
+        <tr>
+          <td>{{ r.worker }}</td>
+          <td>{{ r.pieces }}</td>
+          <td>{{ r.std_min }}</td>
+          <td>${{ '%.2f' % r.earnings }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
-  </section>
-  <section>
+  </div>
+
+  <!-- Bundle Report -->
+  <div class="col-md-6">
     <h2>By Bundle</h2>
-    <table class="table">
-      <thead><tr><th>Bundle</th><th>Pieces</th><th>Std Min</th></tr></thead>
+    <table class="table table-bordered table-striped table-sm">
+      <thead>
+        <tr>
+          <th>Bundle</th>
+          <th>Pieces</th>
+          <th>Std Min</th>
+        </tr>
+      </thead>
       <tbody>
         {% for r in bundles %}
-        <tr><td>{{ r.bundle_code }}</td><td>{{ r.pieces }}</td><td>{{ r.std_min }}</td></tr>
+        <tr>
+          <td>{{ r.bundle_code }}</td>
+          <td>{{ r.pieces }}</td>
+          <td>{{ r.std_min }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </div>
 </div>
 {% endblock %}

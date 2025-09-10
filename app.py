@@ -1,33 +1,42 @@
 import os
+from io import BytesIO
 from datetime import datetime, timedelta
+
 from flask import (
-    Flask, request, jsonify, render_template, redirect, url_for, send_file, abort, flash
+    Flask, request, jsonify, render_template,
+    redirect, url_for, send_file, abort, flash
 )
+from flask_cors import CORS
+import qrcode
 
 # =====================================================================
-# App config
+# App config (explicit folders so static/style.css & templates resolve)
 # =====================================================================
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder="static",
+    static_url_path="/static",
+    template_folder="templates",
+)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
-# Render / Environment vars we show in the UI footer and Settings
+# Environment-configurable bits (set in Render → Environment)
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.00"))
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
 APP_BRAND = os.getenv("APP_BRAND", "Garment ERP")
 
 # =====================================================================
-# In-memory placeholders so the UI renders right now on Render
-# Replace with your DB queries in the TODOs below.
+# Temporary in-memory data (swap with DB queries later)
 # =====================================================================
 
-# Workers
 WORKERS = [
     {"id": 1, "name": "RAHUL SHARMA", "token_id": "RAHUL123", "department": "STITCHING A1"},
     {"id": 2, "name": "PRIYA VERMA",  "token_id": "PRIYA567", "department": "STITCHING B3"},
     {"id": 3, "name": "AMIT KUMAR",   "token_id": "AMIT909",  "department": "FINISHING C1"},
 ]
 
-# Production Orders (list view + optional current active)
 ORDERS = [
     {
         "order_no": "65001001140",
@@ -57,7 +66,6 @@ ACTIVE_ORDER = {
     ],
 }
 
-# Bundles
 BUNDLES = [
     {
         "barcode": "BNDL-001-036-050",
@@ -72,7 +80,7 @@ BUNDLES = [
     }
 ]
 
-# Live / Recent activities (what the dashboard’s “Recent Activity” shows)
+# Live / Recent activities for dashboard table
 RECENT_ACTIVITIES = [
     {
         "ts": (datetime.utcnow() - timedelta(minutes=i * 7)).isoformat() + "Z",
@@ -85,7 +93,7 @@ RECENT_ACTIVITIES = [
 ]
 
 # =====================================================================
-# Helpers (DB: plug your real code if you have sqlite/psql etc.)
+# Helpers
 # =====================================================================
 
 def paginate(items, limit, offset=0):
@@ -93,53 +101,22 @@ def paginate(items, limit, offset=0):
     offset = max(0, int(offset or 0))
     return items[offset: offset + limit]
 
+def authorize_device(req):
+    token = req.headers.get("X-Device-Secret")
+    if token != DEVICE_SECRET:
+        abort(401, description="Invalid device secret")
+
 # =====================================================================
-# Pages
+# UI Pages
 # =====================================================================
 
 @app.route("/")
 def dashboard():
-    """
-    Dashboard (dark UI) – uses dashboard.html
-    Shows stat tiles + recent activity table.
-    """
-    # TODO replace with DB queries
-    total_workers = len(WORKERS)
-    scans_today = len([r for r in RECENT_ACTIVITIES
-                       if datetime.fromisoformat(r["ts"].replace("Z", "")) > datetime.utcnow() - timedelta(days=1)])
-    active_today = total_workers  # If you track presence separately, compute here.
-
-    # dashboard.html consumes AlpineJS dashboard(), but we can also pass data if needed.
-    return render_template(
-        "dashboard.html",
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-        # the Alpine page calls /api endpoints on its own; we still pass footer vars
-    )
-
-
-@app.route("/orders")
-def production_orders_page():
-    """
-    Production Orders page – matches screenshot (form + active order info).
-    """
-    # TODO: If you track a single “active” record, load it. We pass ACTIVE_ORDER placeholder now.
-    styles = ["SAINTX MENS BLAZER"]
-    return render_template(
-        "production_orders.html",
-        active=ACTIVE_ORDER,
-        styles=styles,
-        orders=ORDERS,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
-
+    # The page script may call /api/stats & /api/activities
+    return render_template("dashboard.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
 
 @app.route("/bundles")
 def bundles_page():
-    """
-    Bundle Management – create bundle + active bundle cards.
-    """
     colors = ["BLK3", "BLK4", "GREN", "KHA1", "LGR1", "MDGR", "NYYL"]
     return render_template(
         "bundles.html",
@@ -150,21 +127,29 @@ def bundles_page():
         APP_BRAND=APP_BRAND,
     )
 
+@app.route("/orders")
+def production_orders_page():
+    styles = ["SAINTX MENS BLAZER"]
+    return render_template(
+        "production_orders.html",
+        active=ACTIVE_ORDER,
+        styles=styles,
+        orders=ORDERS,
+        rate_per_piece=RATE_PER_PIECE,
+        APP_BRAND=APP_BRAND,
+    )
 
 @app.route("/live")
 def live_scanning_page():
-    """
-    Live Scanning – recent scans + worker activity.
-    """
-    # TODO: Replace with live metrics
     live = {"active_scans": 0, "avg_time": "2.5 hrs", "efficiency": "104%"}
-    workers_state = [
-        {"name": w["name"], "department": w["department"], "status": "OK"}
-        for w in WORKERS
-    ]
+    workers_state = [{"name": w["name"], "department": w["department"], "status": "OK"} for w in WORKERS]
     recent = [
-        {"bundle": r["barcode"], "worker": r["worker"], "operation": r["operation_code"],
-         "time": datetime.fromisoformat(r["ts"].replace("Z","")).strftime("%d-%m %H:%M")}
+        {
+            "bundle": r["barcode"],
+            "worker": r["worker"],
+            "operation": r["operation_code"],
+            "time": datetime.fromisoformat(r["ts"].replace("Z", "")).strftime("%d-%m %H:%M"),
+        }
         for r in RECENT_ACTIVITIES[:10]
     ]
     return render_template(
@@ -177,17 +162,11 @@ def live_scanning_page():
         APP_BRAND=APP_BRAND,
     )
 
-
 @app.route("/reports")
 def reports_page():
-    """
-    Reports & Analytics – worker performance + export links
-    """
-    # TODO: Replace with aggregate metrics
     stats = {"total_workers": len(WORKERS), "avg_efficiency": "104%", "pieces_today": 150}
     worker_perf = [
-        {"name": w["name"], "department": w["department"], "efficiency": "102%", "earnings": 180.0}
-        for w in WORKERS
+        {"name": w["name"], "department": w["department"], "efficiency": "102%", "earnings": 180.0} for w in WORKERS
     ]
     return render_template(
         "reports.html",
@@ -197,30 +176,18 @@ def reports_page():
         APP_BRAND=APP_BRAND,
     )
 
-
 @app.route("/settings")
 def settings_page():
-    """
-    Settings – shows environment and accent color picker
-    """
-    return render_template(
-        "settings.html",
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
-
-# =====================================================================
-# Workers (kept minimal to match your workers.html template)
-# Plug in your DB as needed.
-# =====================================================================
+    return render_template("settings.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
 
 @app.route("/workers", methods=["GET"])
 def workers_page():
     q = (request.args.get("q") or "").strip().lower()
     if q:
-        filtered = [w for w in WORKERS if q in w["name"].lower()
-                    or q in w["token_id"].lower()
-                    or q in (w.get("department") or "").lower()]
+        filtered = [
+            w for w in WORKERS
+            if q in w["name"].lower() or q in w["token_id"].lower() or q in (w.get("department") or "").lower()
+        ]
     else:
         filtered = WORKERS
     return render_template(
@@ -230,6 +197,27 @@ def workers_page():
         rate_per_piece=RATE_PER_PIECE,
         APP_BRAND=APP_BRAND,
     )
+
+@app.route("/operations")
+def operations_page():
+    operations = [
+        {"code": "OP-101", "desc": "STITCH FRONT PANEL"},
+        {"code": "OP-102", "desc": "JOIN SHOULDERS"},
+    ]
+    return render_template("operations.html", operations=operations, rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+
+@app.route("/assign")
+def assign_operation_page():
+    return render_template("assign_operation.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+
+# Quick styled smoke test
+@app.route("/health-ui")
+def health_ui():
+    return render_template("dashboard.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+
+# =====================================================================
+# Workers CRUD (in-memory placeholders)
+# =====================================================================
 
 @app.route("/workers/create", methods=["POST"])
 def worker_create():
@@ -262,15 +250,8 @@ def worker_delete(wid):
     global WORKERS
     before = len(WORKERS)
     WORKERS = [w for w in WORKERS if w["id"] != wid]
-    if len(WORKERS) < before:
-        flash("Worker deleted.", "success")
-    else:
-        flash("Worker not found.", "error")
+    flash("Worker deleted." if len(WORKERS) < before else "Worker not found.", "success" if len(WORKERS) < before else "error")
     return redirect(url_for("workers_page"))
-
-# Print QR & PNG endpoints are referenced in workers.html; supply simple placeholders
-from io import BytesIO
-import qrcode
 
 @app.route("/workers/<int:wid>/qr.png")
 def worker_qr_png(wid):
@@ -289,11 +270,9 @@ def worker_print(wid):
     w = next((x for x in WORKERS if x["id"] == wid), None)
     if not w:
         abort(404)
-    # print_qr.html already exists in your repo
     return render_template("print_qr.html", worker=w)
 
-# Map workers.html form action URLs to the endpoints above, matching the template names
-# (If your template uses different endpoint names, point them here)
+# Backward-compatible aliases if templates use /worker/... forms
 app.add_url_rule("/worker/create", view_func=worker_create, methods=["POST"])
 app.add_url_rule("/worker/<int:wid>/edit", view_func=worker_edit, methods=["POST"], endpoint="worker_edit")
 app.add_url_rule("/worker/<int:wid>/delete", view_func=worker_delete, methods=["POST"], endpoint="worker_delete")
@@ -301,71 +280,79 @@ app.add_url_rule("/worker/<int:wid>/qr.png", view_func=worker_qr_png, methods=["
 app.add_url_rule("/worker/<int:wid>/print", view_func=worker_print, methods=["GET"], endpoint="worker_print")
 
 # =====================================================================
-# Operations (optional — stubs to satisfy template navigation)
+# ESP32 / UI API
 # =====================================================================
 
-@app.route("/operations")
-def operations_page():
-    # TODO: Replace with your operations list
-    operations = [
-        {"code": "OP-101", "desc": "STITCH FRONT PANEL"},
-        {"code": "OP-102", "desc": "JOIN SHOULDERS"},
+@app.post("/api/scan")
+def api_scan():
+    """ESP32 device posts scan events here (secured by X-Device-Secret header)."""
+    authorize_device(request)
+    data = request.get_json(force=True, silent=True) or {}
+    worker_token = (data.get("worker_token") or "").strip().upper()
+    barcode      = (data.get("barcode") or "").strip().upper()
+    operation    = (data.get("operation_code") or "").strip().upper()
+    pieces       = int(data.get("pieces") or 0)
+    if not (worker_token and barcode and operation and pieces > 0):
+        abort(400, description="Missing fields")
+
+    earned = pieces * RATE_PER_PIECE
+    # also push into "recent activities" so dashboard updates immediately
+    RECENT_ACTIVITIES.insert(0, {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "worker": worker_token,
+        "line": "-",
+        "operation_code": operation,
+        "barcode": barcode
+    })
+    # optional: truncate to a reasonable window
+    if len(RECENT_ACTIVITIES) > 500:
+        del RECENT_ACTIVITIES[500:]
+
+    return jsonify({"ok": True, "earned": earned})
+
+@app.get("/api/workers")
+def api_workers():
+    q = (request.args.get("q") or "").strip().upper()
+    rows = [
+        {"id": w["id"], "token": w["token_id"], "name": w["name"], "department": w.get("department")}
+        for w in WORKERS
+        if not q or q in w["name"].upper() or q in w["token_id"].upper()
     ]
-    return render_template(
-        "operations.html",
-        operations=operations,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+    return jsonify(rows)
 
-@app.route("/assign")
-def assign_operation_page():
-    # TODO: Replace with your assign UI data
-    return render_template(
-        "assign_operation.html",
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+@app.get("/api/bundles")
+def api_bundles():
+    return jsonify(BUNDLES)
 
-# =====================================================================
-# API used by the dashboard (AlpineJS) – keep these names the same
-# =====================================================================
-
-@app.route("/api/stats")
+@app.get("/api/stats")
 def api_stats():
-    """
-    Returns counts for the stat tiles.
-    """
-    # TODO: Replace with DB queries
     total_workers = len(WORKERS)
-    active_today = total_workers
-    scans_today = len([r for r in RECENT_ACTIVITIES
-                       if datetime.fromisoformat(r["ts"].replace("Z","")) > datetime.utcnow() - timedelta(days=1)])
+    scans_today = sum(
+        1 for r in RECENT_ACTIVITIES
+        if datetime.fromisoformat(r["ts"].replace("Z", "")) > datetime.utcnow() - timedelta(days=1)
+    )
+    active_today = total_workers  # replace with real presence if you track it
     return jsonify({
         "total_workers": total_workers,
         "active_today": active_today,
         "scans_today": scans_today,
     })
 
-@app.route("/api/activities")
+@app.get("/api/activities")
 def api_activities():
-    """
-    Recent activity rows for the dashboard table.
-    Accepts ?limit=100
-    """
     limit = request.args.get("limit", 100, type=int)
     rows = paginate(sorted(RECENT_ACTIVITIES, key=lambda r: r["ts"], reverse=True), limit)
     return jsonify(rows)
 
 # =====================================================================
-# Health + start
+# Health / entrypoint
 # =====================================================================
 
-@app.route("/health")
+@app.get("/health")
 def health():
     return jsonify({"ok": True, "ts": datetime.utcnow().isoformat() + "Z"})
 
 if __name__ == "__main__":
-    # For local debug; Render will use gunicorn via Procfile
+    # Local debug; on Render, Procfile runs: gunicorn app:app
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)

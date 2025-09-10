@@ -26,7 +26,8 @@ app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 # ---------------- DB Helpers ---------------- #
 
 def get_conn():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)  # ✅ ensure dir exists
+    # ✅ ensure directory exists before every connection
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -51,9 +52,10 @@ def get_settings():
 
 def ensure_basics():
     from db_setup import init_db
-    print(f"🔧 Using DB at {DB_PATH}")  # ✅ helpful for Render logs
+    print(f"🔧 Using DB at {DB_PATH}")  # helpful for Render logs
     init_db()
 
+# Initialize DB at startup
 ensure_basics()
 
 # ---------------- QR Code ---------------- #
@@ -125,11 +127,20 @@ def dashboard():
     )
 
 # ---------------- Users ---------------- #
-# (unchanged code continues here … keep everything the same)
+# (your existing user routes here)
+
 # ---------------- Bundles ---------------- #
+# (your existing bundle routes here)
+
 # ---------------- Operations ---------------- #
+# (your existing operation routes here)
+
 # ---------------- Tasks ---------------- #
+# (your existing task routes here)
+
 # ---------------- Reports ---------------- #
+# (your existing reports routes here)
+
 # ---------------- APIs ---------------- #
 
 @app.route("/api/health")

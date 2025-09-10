@@ -1,7 +1,6 @@
 pip>=24.1.2
 setuptools>=70.0.0
 
-# your existing pins below...
 Flask==2.3.3
 Jinja2==3.1.2
 itsdangerous==2.1.2
@@ -11,3 +10,4 @@ gunicorn==21.2.0
 werkzeug==2.3.7
 Pillow==10.4.0
 qrcode==7.4.2
+Flask-Cors==4.0.0

@@ -13,10 +13,13 @@ default_db = os.path.join(default_data_dir, 'factory.db')
 DB_PATH = os.getenv("DATABASE_URL", default_db)
 
 def init_db():
+    # ✅ Ensure the DB directory always exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Settings for earnings and targets
+    # ---------------- Settings ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         base_rate_per_min REAL DEFAULT 0.50,
@@ -24,7 +27,7 @@ def init_db():
         quality_target INTEGER DEFAULT 95
     )''')
 
-    # Users (workers)
+    # ---------------- Users (workers) ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_code TEXT UNIQUE NOT NULL,
@@ -35,7 +38,7 @@ def init_db():
         qr_code TEXT UNIQUE
     )''')
 
-    # Bundles
+    # ---------------- Bundles ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS bundles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bundle_code TEXT UNIQUE NOT NULL,
@@ -47,7 +50,7 @@ def init_db():
         qr_code TEXT UNIQUE
     )''')
 
-    # Operations (OB)
+    # ---------------- Operations (OB) ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS operations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         op_no TEXT UNIQUE NOT NULL,
@@ -56,7 +59,7 @@ def init_db():
         std_min REAL DEFAULT 0
     )''')
 
-    # Scans
+    # ---------------- Scans ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS scans (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_id INTEGER NOT NULL,
@@ -68,7 +71,7 @@ def init_db():
         FOREIGN KEY(operation_id) REFERENCES operations(id)
     )''')
 
-    # Tasks
+    # ---------------- Tasks ---------------- #
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_id INTEGER NOT NULL,
@@ -78,14 +81,15 @@ def init_db():
         FOREIGN KEY(worker_id) REFERENCES users(id)
     )''')
 
-    # Ensure there is exactly one settings row
+    # ---------------- Defaults & Indexes ---------------- #
+    # Ensure exactly one settings row exists
     c.execute("""
         INSERT OR IGNORE INTO settings
         (id, base_rate_per_min, efficiency_target, quality_target)
         VALUES (1, 0.50, 100, 95)
     """)
 
-    # Indexes
+    # Helpful indexes for performance
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans(worker_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_bundle ON scans(bundle_id)')

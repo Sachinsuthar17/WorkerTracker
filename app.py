@@ -26,6 +26,7 @@ app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 # ---------------- DB Helpers ---------------- #
 
 def get_conn():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)  # ✅ ensure dir exists
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -50,6 +51,7 @@ def get_settings():
 
 def ensure_basics():
     from db_setup import init_db
+    print(f"🔧 Using DB at {DB_PATH}")  # ✅ helpful for Render logs
     init_db()
 
 ensure_basics()

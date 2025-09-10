@@ -4,10 +4,7 @@ import csv
 import sqlite3
 from datetime import datetime, date
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, flash
-try:
-    import qrcode
-except Exception as e:
-    qrcode = None
+import qrcode  # require in requirements.txt
 
 DB_PATH = os.getenv("DATABASE_URL", "factory.db")
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
@@ -16,32 +13,30 @@ AUTO_CREATE_UNKNOWN = os.getenv("AUTO_CREATE", "1") == "1"
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
-# DB helpers
+# ---------------- DB Helpers ---------------- #
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def query(sql, args=(), one=False):
     with get_conn() as conn:
         cur = conn.execute(sql, args)
         rv = cur.fetchall()
+        cur.close()
     return (rv[0] if rv else None) if one else rv
-
 
 def execute(sql, args=()):
     with get_conn() as conn:
         cur = conn.execute(sql, args)
         conn.commit()
-        return cur.lastrowid
-
+        last_id = cur.lastrowid
+        cur.close()
+        return last_id
 
 def get_settings():
-    row = query("SELECT * FROM settings WHERE id=1", one=True)
-    return row
-
+    return query("SELECT * FROM settings WHERE id=1", one=True)
 
 def ensure_basics():
     from db_setup import init_db
@@ -49,17 +44,9 @@ def ensure_basics():
 
 ensure_basics()
 
+# ---------------- QR Code ---------------- #
 
 def generate_qr_png(text: str) -> bytes:
-    if qrcode is None:
-        from PIL import Image, ImageDraw
-        img = Image.new('RGB', (300, 300), color='white')
-        d = ImageDraw.Draw(img)
-        d.text((10, 140), text, fill='black')
-        bio = io.BytesIO()
-        img.save(bio, format='PNG')
-        bio.seek(0)
-        return bio.read()
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
     qr.add_data(text)
     qr.make(fit=True)
@@ -68,6 +55,8 @@ def generate_qr_png(text: str) -> bytes:
     img.save(bio, format="PNG")
     bio.seek(0)
     return bio.read()
+
+# ---------------- Routes ---------------- #
 
 @app.route("/")
 def index():
@@ -78,17 +67,20 @@ def dashboard():
     total_workers = query("SELECT COUNT(*) AS c FROM users", one=True)["c"]
     bundles_active = query("SELECT COUNT(*) AS c FROM bundles", one=True)["c"]
     scans_today = query("SELECT COUNT(*) AS c FROM scans WHERE DATE(timestamp, 'localtime') = DATE('now','localtime')", one=True)["c"]
+
     total_std_today = query("""
         SELECT COALESCE(SUM(o.std_min),0) AS mins
         FROM scans s 
         JOIN operations o ON s.operation_id = o.id
         WHERE DATE(s.timestamp, 'localtime') = DATE('now','localtime')
     """, one=True)["mins"]
+
     base_rate = get_settings()["base_rate_per_min"]
     earnings_today = round(total_std_today * base_rate, 2)
 
     recent = query("""
-        SELECT s.id, s.timestamp, u.name AS worker, b.bundle_code AS bundle, o.op_no AS op_no, o.description AS op_desc, o.std_min
+        SELECT s.id, s.timestamp, u.name AS worker, b.bundle_code AS bundle, 
+               o.op_no, o.description AS op_desc, o.std_min
         FROM scans s
         JOIN users u ON u.id = s.worker_id
         JOIN bundles b ON b.id = s.bundle_id
@@ -118,21 +110,28 @@ def dashboard():
         settings=get_settings()
     )
 
+# ---------------- Users ---------------- #
+
 @app.route("/users", methods=["GET", "POST"])
 def users():
     if request.method == "POST":
-        name = request.form.get("name").strip()
-        worker_code = request.form.get("worker_code").strip()
+        name = request.form.get("name", "").strip()
+        worker_code = request.form.get("worker_code", "").strip()
         department = request.form.get("department") or None
         skill = request.form.get("skill") or None
         hourly_rate = float(request.form.get("hourly_rate") or 0)
+
         try:
-            execute("INSERT INTO users(worker_code, name, department, skill, hourly_rate, qr_code) VALUES (?,?,?,?,?,?)",
-                    (worker_code, name, department, skill, hourly_rate, worker_code))
+            execute(
+                "INSERT INTO users(worker_code, name, department, skill, hourly_rate, qr_code) VALUES (?,?,?,?,?,?)",
+                (worker_code, name, department, skill, hourly_rate, worker_code)
+            )
             flash("Worker added","success")
         except sqlite3.IntegrityError:
             flash(f"Worker code already exists: {worker_code}","danger")
+
         return redirect(url_for("users"))
+
     rows = query("SELECT * FROM users ORDER BY id DESC")
     return render_template("users.html", users=rows)
 
@@ -147,24 +146,30 @@ def worker_qr(uid):
     row = query("SELECT worker_code FROM users WHERE id=?", (uid,), one=True)
     if not row:
         return ("not found", 404)
-    img = generate_qr_png(row["worker_code"])
-    return send_file(io.BytesIO(img), mimetype="image/png")
+    return send_file(io.BytesIO(generate_qr_png(row["worker_code"])), mimetype="image/png")
+
+# ---------------- Bundles ---------------- #
 
 @app.route("/bundles", methods=["GET","POST"])
 def bundles_page():
     if request.method == "POST":
-        bundle_code = request.form.get("bundle_code").strip()
+        bundle_code = request.form.get("bundle_code", "").strip()
         style = request.form.get("style") or None
         color = request.form.get("color") or None
         size_range = request.form.get("size_range") or None
         quantity = int(request.form.get("quantity") or 0)
+
         try:
-            execute("INSERT INTO bundles(bundle_code, style, color, size_range, quantity, current_op, qr_code) VALUES (?,?,?,?,?,?,?)",
-                    (bundle_code, style, color, size_range, quantity, None, bundle_code))
+            execute(
+                "INSERT INTO bundles(bundle_code, style, color, size_range, quantity, current_op, qr_code) VALUES (?,?,?,?,?,?,?)",
+                (bundle_code, style, color, size_range, quantity, None, bundle_code)
+            )
             flash("Bundle added","success")
         except sqlite3.IntegrityError:
             flash(f"Bundle already exists: {bundle_code}","danger")
+
         return redirect(url_for("bundles_page"))
+
     rows = query("SELECT * FROM bundles ORDER BY id DESC")
     return render_template("bundles.html", bundles=rows)
 
@@ -173,36 +178,48 @@ def bundle_qr(bid):
     row = query("SELECT bundle_code FROM bundles WHERE id=?", (bid,), one=True)
     if not row:
         return ("not found", 404)
-    img = generate_qr_png(row["bundle_code"])
-    return send_file(io.BytesIO(img), mimetype="image/png")
+    return send_file(io.BytesIO(generate_qr_png(row["bundle_code"])), mimetype="image/png")
+
+# ---------------- Operations ---------------- #
 
 @app.route("/operations", methods=["GET","POST"])
 def operations_page():
     if request.method == "POST":
-        op_no = request.form.get("op_no").strip()
+        op_no = request.form.get("op_no", "").strip()
         description = request.form.get("description") or None
         section = request.form.get("section") or None
         std_min = float(request.form.get("std_min") or 0)
+
         try:
             execute("INSERT INTO operations(op_no, description, section, std_min) VALUES (?,?,?,?)",
                     (op_no, description, section, std_min))
             flash("Operation added","success")
         except sqlite3.IntegrityError:
             flash(f"Operation already exists: {op_no}","danger")
+
         return redirect(url_for("operations_page"))
+
     rows = query("SELECT * FROM operations ORDER BY CAST(op_no AS INTEGER) ASC")
     return render_template("operations.html", operations=rows)
+
+# ---------------- Tasks ---------------- #
 
 @app.route("/assign_task", methods=["GET","POST"])
 def assign_task():
     if request.method == "POST":
         worker_id = int(request.form.get("worker_id"))
-        description = request.form.get("description").strip()
+        description = request.form.get("description", "").strip()
         execute("INSERT INTO tasks(worker_id, description, status) VALUES (?,?, 'OPEN')", (worker_id, description))
         flash("Task assigned","success")
         return redirect(url_for("assign_task"))
+
     workers = query("SELECT * FROM users ORDER BY name")
-    tasks = query("SELECT t.*, u.name FROM tasks t JOIN users u ON u.id = t.worker_id ORDER BY t.created_at DESC")
+    tasks = query("""
+        SELECT t.*, u.name 
+        FROM tasks t 
+        JOIN users u ON u.id = t.worker_id 
+        ORDER BY t.created_at DESC
+    """)
     return render_template("assign_task.html", workers=workers, tasks=tasks)
 
 @app.route("/tasks/<int:tid>/complete", methods=["POST"])
@@ -211,14 +228,12 @@ def complete_task(tid):
     flash("Task completed","info")
     return redirect(url_for("assign_task"))
 
+# ---------------- Reports ---------------- #
+
 @app.route("/reports")
 def reports():
-    start = request.args.get("start")
-    end = request.args.get("end")
-    if not start or not end:
-        today = date.today().isoformat()
-        start = request.args.get("start", today)
-        end = request.args.get("end", today)
+    start = request.args.get("start") or date.today().isoformat()
+    end = request.args.get("end") or date.today().isoformat()
 
     rows = query("""
         SELECT u.name AS worker, COUNT(*) AS pieces, ROUND(SUM(o.std_min),2) AS std_min,
@@ -246,7 +261,8 @@ def reports():
 @app.route("/export/scans.csv")
 def export_scans_csv():
     rows = query("""
-        SELECT s.id, s.timestamp, u.worker_code, u.name, b.bundle_code, o.op_no, o.description, o.std_min
+        SELECT s.id, s.timestamp, u.worker_code, u.name, b.bundle_code, 
+               o.op_no, o.description, o.std_min
         FROM scans s
         JOIN users u ON u.id=s.worker_id
         JOIN bundles b ON b.id=s.bundle_id
@@ -259,6 +275,8 @@ def export_scans_csv():
     for r in rows:
         writer.writerow([r["id"], r["timestamp"], r["worker_code"], r["name"], r["bundle_code"], r["op_no"], r["description"], r["std_min"]])
     return send_file(io.BytesIO(si.getvalue().encode("utf-8")), mimetype="text/csv", as_attachment=True, download_name="scans.csv")
+
+# ---------------- APIs ---------------- #
 
 @app.route("/api/logs")
 def api_logs():
@@ -277,6 +295,7 @@ def api_logs():
 def scan():
     data = request.get_json(silent=True) or request.form.to_dict()
     secret = data.get("device_secret") or request.headers.get("X-Device-Secret")
+
     if secret != DEVICE_SECRET:
         return jsonify({"ok": False, "error": "Invalid device secret"}), 403
 
@@ -287,6 +306,7 @@ def scan():
     if not (worker_qr and bundle_qr and operation):
         return jsonify({"ok": False, "error": "worker_qr, bundle_qr, operation required"}), 400
 
+    # Worker
     w = query("SELECT id FROM users WHERE worker_code=?", (worker_qr,), one=True)
     if not w and AUTO_CREATE_UNKNOWN:
         wid = execute("INSERT INTO users(worker_code, name, qr_code) VALUES (?,?,?)", (worker_qr, worker_qr, worker_qr))
@@ -295,6 +315,7 @@ def scan():
     else:
         wid = w["id"]
 
+    # Bundle
     b = query("SELECT id FROM bundles WHERE bundle_code=?", (bundle_qr,), one=True)
     if not b and AUTO_CREATE_UNKNOWN:
         bid = execute("INSERT INTO bundles(bundle_code, qr_code) VALUES (?,?)", (bundle_qr, bundle_qr))
@@ -303,6 +324,7 @@ def scan():
     else:
         bid = b["id"]
 
+    # Operation
     o = query("SELECT id FROM operations WHERE op_no=?", (operation,), one=True)
     if not o and AUTO_CREATE_UNKNOWN:
         oid = execute("INSERT INTO operations(op_no, description, std_min) VALUES (?,?,?)", (operation, "AUTO", 0.5))
@@ -317,6 +339,8 @@ def scan():
 @app.route("/api/health")
 def health():
     return jsonify({"status":"ok","time": datetime.now().isoformat()}), 200
+
+# ---------------- Main ---------------- #
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))

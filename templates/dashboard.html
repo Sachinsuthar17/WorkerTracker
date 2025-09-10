@@ -1,87 +1,41 @@
-{% extends "layout.html" %}
-{% set title = "Dashboard" %}
+{% extends "base.html" %}
 {% block content %}
-
-<div class="page-header">
-  <h1>Production Dashboard</h1>
-  <p>Live overview</p>
+<h1>Production Dashboard</h1>
+<div class="cards">
+  <div class="card"><div class="card-title">Active Workers</div><div class="card-value">{{ total_workers }}</div></div>
+  <div class="card"><div class="card-title">Bundles</div><div class="card-value">{{ bundles_active }}</div></div>
+  <div class="card"><div class="card-title">Pieces Today</div><div class="card-value">{{ scans_today }}</div></div>
+  <div class="card"><div class="card-title">Earnings Today</div><div class="card-value">${{ '%.2f' % earnings_today }}</div></div>
 </div>
 
-<div x-data="dashboard()" x-init="init()" class="grid gap-6">
-
-  <section class="stats-grid">
-    <div class="stats-tile">
-      <div class="title">Total Workers</div>
-      <div class="value" x-text="stats.total_workers ?? '—'"></div>
-    </div>
-    <div class="stats-tile">
-      <div class="title">Active Today</div>
-      <div class="value" x-text="stats.active_today ?? '—'"></div>
-    </div>
-    <div class="stats-tile">
-      <div class="title">Scans Today</div>
-      <div class="value">
-        <span x-text="stats.scans_today ?? '—'"></span>
-        <span class="badge" x-show="stats.scans_today !== undefined">₹<span x-text="(stats.scans_today * rate).toFixed(0)"></span></span>
-      </div>
-    </div>
-    <div class="stats-tile">
-      <div class="title">Live</div>
-      <div class="value">●</div>
-    </div>
+<div class="grid-2">
+  <section>
+    <h2>Recent Activity</h2>
+    <table class="table" id="recent-table">
+      <thead><tr><th>Time</th><th>Worker</th><th>Bundle</th><th>Op</th><th>Std Min</th></tr></thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td>{{ r.timestamp }}</td>
+          <td>{{ r.worker }}</td>
+          <td>{{ r.bundle }}</td>
+          <td>{{ r.op_no }}</td>
+          <td>{{ r.std_min }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </section>
-
-  <section class="card">
-    <div class="row" style="justify-content:space-between">
-      <h2>Recent Activity</h2>
-      <div class="badge">Auto refresh in <span x-text="countdown"></span>s</div>
-    </div>
-    <div class="table-container">
-      <table class="ui-table">
-        <thead>
-          <tr>
-            <th>Time</th><th>Worker</th><th>Line</th><th>Operation</th><th>Barcode</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="row in rows" :key="row.ts + row.barcode">
-            <tr>
-              <td x-text="formatTime(row.ts)"></td>
-              <td>
-                <div class="row">
-                  <span class="badge" x-text="avatar(row.worker)"></span>
-                  <span x-text="row.worker || '(unknown)'"></span>
-                </div>
-              </td>
-              <td x-text="row.line || '-'"></td>
-              <td><span class="badge" x-text="row.operation_code || '-'"></span></td>
-              <td style="font-family:ui-monospace" x-text="row.barcode || '-'"></td>
-            </tr>
-          </template>
-          <tr x-show="rows.length===0"><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:16px">No scans yet today.</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <section>
+    <h2>Worker Leaderboard (Today)</h2>
+    <table class="table">
+      <thead><tr><th>Worker</th><th>Pieces</th><th>Std Min</th></tr></thead>
+      <tbody>
+        {% for r in leaderboard %}
+        <tr><td>{{ r.name }}</td><td>{{ r.pieces }}</td><td>{{ r.std_min }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </section>
 </div>
-
-<!-- AlpineJS logic kept from your original page -->
-<script>
-function dashboard(){
-  return {
-    rate: {{ (rate_per_piece|default(1.0)) }},
-    stats: {}, rows: [], countdown: 60, tickTimer: null,
-    async fetchStats(){ const r = await fetch(`/api/stats`); if(r.ok) this.stats = await r.json(); },
-    async fetchRows(){ const r = await fetch(`/api/activities?limit=100`); if(r.ok) this.rows = await r.json(); },
-    loop(){
-      this.countdown = 60;
-      this.tickTimer = setInterval(async ()=>{ this.countdown--; if(this.countdown<=0){ await this.refresh(); this.countdown=60; } }, 1000);
-    },
-    async refresh(){ await Promise.all([this.fetchStats(), this.fetchRows()]); },
-    formatTime(ts){ if(!ts) return '-'; try{ const d=new Date(ts); return d.toLocaleString(); }catch(e){ return ts; } },
-    avatar(name){ const s=(name||'').trim().split(/\s+/); return (s[0]?.[0]||'B') + (s[1]?.[0]||'S'); },
-    async init(){ await this.refresh(); this.loop(); }
-  }
-}
-</script>
 {% endblock %}

@@ -1,358 +1,323 @@
 import os
-from io import BytesIO
-from datetime import datetime, timedelta
+import io
+import csv
+import sqlite3
+from datetime import datetime, date
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, flash
+try:
+    import qrcode
+except Exception as e:
+    qrcode = None
 
-from flask import (
-    Flask, request, jsonify, render_template,
-    redirect, url_for, send_file, abort, flash
-)
-from flask_cors import CORS
-import qrcode
+DB_PATH = os.getenv("DATABASE_URL", "factory.db")
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
+AUTO_CREATE_UNKNOWN = os.getenv("AUTO_CREATE", "1") == "1"
 
-# =====================================================================
-# App config (explicit folders so static/style.css & templates resolve)
-# =====================================================================
-app = Flask(
-    __name__,
-    static_folder="static",
-    static_url_path="/static",
-    template_folder="templates",
-)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-
+app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
-# Environment-configurable bits (set in Render → Environment)
-RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "1.00"))
-DEVICE_SECRET = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
-APP_BRAND = os.getenv("APP_BRAND", "Garment ERP")
+# DB helpers
 
-# =====================================================================
-# Temporary in-memory data (swap with DB queries later)
-# =====================================================================
+def get_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-WORKERS = [
-    {"id": 1, "name": "RAHUL SHARMA", "token_id": "RAHUL123", "department": "STITCHING A1"},
-    {"id": 2, "name": "PRIYA VERMA",  "token_id": "PRIYA567", "department": "STITCHING B3"},
-    {"id": 3, "name": "AMIT KUMAR",   "token_id": "AMIT909",  "department": "FINISHING C1"},
-]
 
-ORDERS = [
-    {
-        "order_no": "65001001140",
-        "style_no": "SAINTX1",
-        "style_name": "SAINTX MENS BLAZER",
-        "buyer": "BANSWARA GARMENTS",
-        "order_qty": 1119,
-        "delivery_date": "30-11-2024",
-        "status": "active",
-        "created_at": "2024-11-01 10:00:00",
-    }
-]
+def query(sql, args=(), one=False):
+    with get_conn() as conn:
+        cur = conn.execute(sql, args)
+        rv = cur.fetchall()
+    return (rv[0] if rv else None) if one else rv
 
-ACTIVE_ORDER = {
-    "order_no": "65001001140",
-    "style": "SAINTX MENS BLAZER",
-    "buyer": "BANSWARA GARMENTS",
-    "quantity": 1119,
-    "delivery": "30-11-2024",
-    "colors": [
-        {"code": "BLK3", "qty": 200},
-        {"code": "BLK4", "qty": 250},
-        {"code": "GREN", "qty": 180},
-        {"code": "KHA1", "qty": 170},
-        {"code": "LGR1", "qty": 160},
-        {"code": "MDGR", "qty": 159},
-    ],
-}
 
-BUNDLES = [
-    {
-        "barcode": "BNDL-001-036-050",
-        "status": "IN_PROGRESS",
-        "style": "SAINTX MENS BLAZER",
-        "color": "BLK3",
-        "size_range": "036-050",
-        "quantity": 50,
-        "current_op": "STITCH FRONT PANEL",
-        "progress": 42,
-        "earned": 210.0,
-    }
-]
+def execute(sql, args=()):
+    with get_conn() as conn:
+        cur = conn.execute(sql, args)
+        conn.commit()
+        return cur.lastrowid
 
-# Live / Recent activities for dashboard table
-RECENT_ACTIVITIES = [
-    {
-        "ts": (datetime.utcnow() - timedelta(minutes=i * 7)).isoformat() + "Z",
-        "worker": WORKERS[i % len(WORKERS)]["name"],
-        "line": WORKERS[i % len(WORKERS)]["department"],
-        "operation_code": f"OP-{100+i}",
-        "barcode": f"BNDL-00{i}-036-050",
-    }
-    for i in range(1, 11)
-]
 
-# =====================================================================
-# Helpers
-# =====================================================================
+def get_settings():
+    row = query("SELECT * FROM settings WHERE id=1", one=True)
+    return row
 
-def paginate(items, limit, offset=0):
-    limit = max(1, min(int(limit or 100), 500))
-    offset = max(0, int(offset or 0))
-    return items[offset: offset + limit]
 
-def authorize_device(req):
-    token = req.headers.get("X-Device-Secret")
-    if token != DEVICE_SECRET:
-        abort(401, description="Invalid device secret")
+def ensure_basics():
+    from db_setup import init_db
+    init_db()
 
-# =====================================================================
-# UI Pages
-# =====================================================================
+ensure_basics()
+
+
+def generate_qr_png(text: str) -> bytes:
+    if qrcode is None:
+        from PIL import Image, ImageDraw
+        img = Image.new('RGB', (300, 300), color='white')
+        d = ImageDraw.Draw(img)
+        d.text((10, 140), text, fill='black')
+        bio = io.BytesIO()
+        img.save(bio, format='PNG')
+        bio.seek(0)
+        return bio.read()
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    bio.seek(0)
+    return bio.read()
 
 @app.route("/")
+def index():
+    return redirect(url_for("dashboard"))
+
+@app.route("/dashboard")
 def dashboard():
-    # The page script may call /api/stats & /api/activities
-    return render_template("dashboard.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+    total_workers = query("SELECT COUNT(*) AS c FROM users", one=True)["c"]
+    bundles_active = query("SELECT COUNT(*) AS c FROM bundles", one=True)["c"]
+    scans_today = query("SELECT COUNT(*) AS c FROM scans WHERE DATE(timestamp, 'localtime') = DATE('now','localtime')", one=True)["c"]
+    total_std_today = query("""
+        SELECT COALESCE(SUM(o.std_min),0) AS mins
+        FROM scans s 
+        JOIN operations o ON s.operation_id = o.id
+        WHERE DATE(s.timestamp, 'localtime') = DATE('now','localtime')
+    """, one=True)["mins"]
+    base_rate = get_settings()["base_rate_per_min"]
+    earnings_today = round(total_std_today * base_rate, 2)
 
-@app.route("/bundles")
-def bundles_page():
-    colors = ["BLK3", "BLK4", "GREN", "KHA1", "LGR1", "MDGR", "NYYL"]
-    return render_template(
-        "bundles.html",
-        bundles=BUNDLES,
-        orders=[{"id": 1, "order_no": ACTIVE_ORDER["order_no"], "style": ACTIVE_ORDER["style"]}],
-        colors=colors,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+    recent = query("""
+        SELECT s.id, s.timestamp, u.name AS worker, b.bundle_code AS bundle, o.op_no AS op_no, o.description AS op_desc, o.std_min
+        FROM scans s
+        JOIN users u ON u.id = s.worker_id
+        JOIN bundles b ON b.id = s.bundle_id
+        JOIN operations o ON o.id = s.operation_id
+        ORDER BY s.timestamp DESC
+        LIMIT 20
+    """)
 
-@app.route("/orders")
-def production_orders_page():
-    styles = ["SAINTX MENS BLAZER"]
-    return render_template(
-        "production_orders.html",
-        active=ACTIVE_ORDER,
-        styles=styles,
-        orders=ORDERS,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+    leaderboard = query("""
+        SELECT u.name, COUNT(*) AS pieces, ROUND(SUM(o.std_min),2) AS std_min
+        FROM scans s
+        JOIN users u ON u.id = s.worker_id
+        JOIN operations o ON o.id = s.operation_id
+        WHERE DATE(s.timestamp, 'localtime') = DATE('now','localtime')
+        GROUP BY u.name
+        ORDER BY pieces DESC
+        LIMIT 10
+    """)
 
-@app.route("/live")
-def live_scanning_page():
-    live = {"active_scans": 0, "avg_time": "2.5 hrs", "efficiency": "104%"}
-    workers_state = [{"name": w["name"], "department": w["department"], "status": "OK"} for w in WORKERS]
-    recent = [
-        {
-            "bundle": r["barcode"],
-            "worker": r["worker"],
-            "operation": r["operation_code"],
-            "time": datetime.fromisoformat(r["ts"].replace("Z", "")).strftime("%d-%m %H:%M"),
-        }
-        for r in RECENT_ACTIVITIES[:10]
-    ]
-    return render_template(
-        "live_scanning.html",
-        live=live,
+    return render_template("dashboard.html",
+        total_workers=total_workers,
+        bundles_active=bundles_active,
+        scans_today=scans_today,
+        earnings_today=earnings_today,
         recent=recent,
-        workers=workers_state,
-        device_secret=DEVICE_SECRET,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
+        leaderboard=leaderboard,
+        settings=get_settings()
     )
+
+@app.route("/users", methods=["GET", "POST"])
+def users():
+    if request.method == "POST":
+        name = request.form.get("name").strip()
+        worker_code = request.form.get("worker_code").strip()
+        department = request.form.get("department") or None
+        skill = request.form.get("skill") or None
+        hourly_rate = float(request.form.get("hourly_rate") or 0)
+        try:
+            execute("INSERT INTO users(worker_code, name, department, skill, hourly_rate, qr_code) VALUES (?,?,?,?,?,?)",
+                    (worker_code, name, department, skill, hourly_rate, worker_code))
+            flash("Worker added","success")
+        except sqlite3.IntegrityError:
+            flash(f"Worker code already exists: {worker_code}","danger")
+        return redirect(url_for("users"))
+    rows = query("SELECT * FROM users ORDER BY id DESC")
+    return render_template("users.html", users=rows)
+
+@app.route("/users/<int:uid>/delete", methods=["POST"])
+def users_delete(uid):
+    execute("DELETE FROM users WHERE id = ?", (uid,))
+    flash("Worker deleted","info")
+    return redirect(url_for("users"))
+
+@app.route("/qrcode/worker/<int:uid>.png")
+def worker_qr(uid):
+    row = query("SELECT worker_code FROM users WHERE id=?", (uid,), one=True)
+    if not row:
+        return ("not found", 404)
+    img = generate_qr_png(row["worker_code"])
+    return send_file(io.BytesIO(img), mimetype="image/png")
+
+@app.route("/bundles", methods=["GET","POST"])
+def bundles_page():
+    if request.method == "POST":
+        bundle_code = request.form.get("bundle_code").strip()
+        style = request.form.get("style") or None
+        color = request.form.get("color") or None
+        size_range = request.form.get("size_range") or None
+        quantity = int(request.form.get("quantity") or 0)
+        try:
+            execute("INSERT INTO bundles(bundle_code, style, color, size_range, quantity, current_op, qr_code) VALUES (?,?,?,?,?,?,?)",
+                    (bundle_code, style, color, size_range, quantity, None, bundle_code))
+            flash("Bundle added","success")
+        except sqlite3.IntegrityError:
+            flash(f"Bundle already exists: {bundle_code}","danger")
+        return redirect(url_for("bundles_page"))
+    rows = query("SELECT * FROM bundles ORDER BY id DESC")
+    return render_template("bundles.html", bundles=rows)
+
+@app.route("/qrcode/bundle/<int:bid>.png")
+def bundle_qr(bid):
+    row = query("SELECT bundle_code FROM bundles WHERE id=?", (bid,), one=True)
+    if not row:
+        return ("not found", 404)
+    img = generate_qr_png(row["bundle_code"])
+    return send_file(io.BytesIO(img), mimetype="image/png")
+
+@app.route("/operations", methods=["GET","POST"])
+def operations_page():
+    if request.method == "POST":
+        op_no = request.form.get("op_no").strip()
+        description = request.form.get("description") or None
+        section = request.form.get("section") or None
+        std_min = float(request.form.get("std_min") or 0)
+        try:
+            execute("INSERT INTO operations(op_no, description, section, std_min) VALUES (?,?,?,?)",
+                    (op_no, description, section, std_min))
+            flash("Operation added","success")
+        except sqlite3.IntegrityError:
+            flash(f"Operation already exists: {op_no}","danger")
+        return redirect(url_for("operations_page"))
+    rows = query("SELECT * FROM operations ORDER BY CAST(op_no AS INTEGER) ASC")
+    return render_template("operations.html", operations=rows)
+
+@app.route("/assign_task", methods=["GET","POST"])
+def assign_task():
+    if request.method == "POST":
+        worker_id = int(request.form.get("worker_id"))
+        description = request.form.get("description").strip()
+        execute("INSERT INTO tasks(worker_id, description, status) VALUES (?,?, 'OPEN')", (worker_id, description))
+        flash("Task assigned","success")
+        return redirect(url_for("assign_task"))
+    workers = query("SELECT * FROM users ORDER BY name")
+    tasks = query("SELECT t.*, u.name FROM tasks t JOIN users u ON u.id = t.worker_id ORDER BY t.created_at DESC")
+    return render_template("assign_task.html", workers=workers, tasks=tasks)
+
+@app.route("/tasks/<int:tid>/complete", methods=["POST"])
+def complete_task(tid):
+    execute("UPDATE tasks SET status='DONE' WHERE id=?", (tid,))
+    flash("Task completed","info")
+    return redirect(url_for("assign_task"))
 
 @app.route("/reports")
-def reports_page():
-    stats = {"total_workers": len(WORKERS), "avg_efficiency": "104%", "pieces_today": 150}
-    worker_perf = [
-        {"name": w["name"], "department": w["department"], "efficiency": "102%", "earnings": 180.0} for w in WORKERS
-    ]
-    return render_template(
-        "reports.html",
-        stats=stats,
-        worker_perf=worker_perf,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+def reports():
+    start = request.args.get("start")
+    end = request.args.get("end")
+    if not start or not end:
+        today = date.today().isoformat()
+        start = request.args.get("start", today)
+        end = request.args.get("end", today)
 
-@app.route("/settings")
-def settings_page():
-    return render_template("settings.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+    rows = query("""
+        SELECT u.name AS worker, COUNT(*) AS pieces, ROUND(SUM(o.std_min),2) AS std_min,
+               ROUND(SUM(o.std_min) * (SELECT base_rate_per_min FROM settings WHERE id=1), 2) AS earnings
+        FROM scans s 
+        JOIN users u ON u.id = s.worker_id
+        JOIN operations o ON o.id = s.operation_id
+        WHERE DATE(s.timestamp, 'localtime') BETWEEN ? AND ?
+        GROUP BY u.name
+        ORDER BY pieces DESC
+    """, (start, end))
 
-@app.route("/workers", methods=["GET"])
-def workers_page():
-    q = (request.args.get("q") or "").strip().lower()
-    if q:
-        filtered = [
-            w for w in WORKERS
-            if q in w["name"].lower() or q in w["token_id"].lower() or q in (w.get("department") or "").lower()
-        ]
+    bundles = query("""
+        SELECT b.bundle_code, COUNT(*) AS pieces, ROUND(SUM(o.std_min),2) AS std_min
+        FROM scans s
+        JOIN bundles b ON b.id = s.bundle_id
+        JOIN operations o ON o.id = s.operation_id
+        WHERE DATE(s.timestamp, 'localtime') BETWEEN ? AND ?
+        GROUP BY b.bundle_code
+        ORDER BY pieces DESC
+    """, (start, end))
+
+    return render_template("reports.html", rows=rows, bundles=bundles, start=start, end=end, settings=get_settings())
+
+@app.route("/export/scans.csv")
+def export_scans_csv():
+    rows = query("""
+        SELECT s.id, s.timestamp, u.worker_code, u.name, b.bundle_code, o.op_no, o.description, o.std_min
+        FROM scans s
+        JOIN users u ON u.id=s.worker_id
+        JOIN bundles b ON b.id=s.bundle_id
+        JOIN operations o ON o.id=s.operation_id
+        ORDER BY s.timestamp DESC
+    """)
+    si = io.StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["id","timestamp","worker_code","name","bundle_code","operation","description","std_min"])
+    for r in rows:
+        writer.writerow([r["id"], r["timestamp"], r["worker_code"], r["name"], r["bundle_code"], r["op_no"], r["description"], r["std_min"]])
+    return send_file(io.BytesIO(si.getvalue().encode("utf-8")), mimetype="text/csv", as_attachment=True, download_name="scans.csv")
+
+@app.route("/api/logs")
+def api_logs():
+    rows = query("""
+        SELECT s.timestamp, u.name AS worker, b.bundle_code AS bundle, o.op_no AS operation
+        FROM scans s
+        JOIN users u ON u.id = s.worker_id
+        JOIN bundles b ON b.id = s.bundle_id
+        JOIN operations o ON o.id = s.operation_id
+        ORDER BY s.id DESC
+        LIMIT 30
+    """)
+    return jsonify([dict(r) for r in rows])
+
+@app.route("/scan", methods=["POST"])
+def scan():
+    data = request.get_json(silent=True) or request.form.to_dict()
+    secret = data.get("device_secret") or request.headers.get("X-Device-Secret")
+    if secret != DEVICE_SECRET:
+        return jsonify({"ok": False, "error": "Invalid device secret"}), 403
+
+    worker_qr = (data.get("worker_qr") or "").strip()
+    bundle_qr = (data.get("bundle_qr") or "").strip()
+    operation = (data.get("operation") or "").strip()
+
+    if not (worker_qr and bundle_qr and operation):
+        return jsonify({"ok": False, "error": "worker_qr, bundle_qr, operation required"}), 400
+
+    w = query("SELECT id FROM users WHERE worker_code=?", (worker_qr,), one=True)
+    if not w and AUTO_CREATE_UNKNOWN:
+        wid = execute("INSERT INTO users(worker_code, name, qr_code) VALUES (?,?,?)", (worker_qr, worker_qr, worker_qr))
+    elif not w:
+        return jsonify({"ok": False, "error": f"Unknown worker {worker_qr}"}), 404
     else:
-        filtered = WORKERS
-    return render_template(
-        "workers.html",
-        workers=filtered,
-        search=q,
-        rate_per_piece=RATE_PER_PIECE,
-        APP_BRAND=APP_BRAND,
-    )
+        wid = w["id"]
 
-@app.route("/operations")
-def operations_page():
-    operations = [
-        {"code": "OP-101", "desc": "STITCH FRONT PANEL"},
-        {"code": "OP-102", "desc": "JOIN SHOULDERS"},
-    ]
-    return render_template("operations.html", operations=operations, rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+    b = query("SELECT id FROM bundles WHERE bundle_code=?", (bundle_qr,), one=True)
+    if not b and AUTO_CREATE_UNKNOWN:
+        bid = execute("INSERT INTO bundles(bundle_code, qr_code) VALUES (?,?)", (bundle_qr, bundle_qr))
+    elif not b:
+        return jsonify({"ok": False, "error": f"Unknown bundle {bundle_qr}"}), 404
+    else:
+        bid = b["id"]
 
-@app.route("/assign")
-def assign_operation_page():
-    return render_template("assign_operation.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+    o = query("SELECT id FROM operations WHERE op_no=?", (operation,), one=True)
+    if not o and AUTO_CREATE_UNKNOWN:
+        oid = execute("INSERT INTO operations(op_no, description, std_min) VALUES (?,?,?)", (operation, "AUTO", 0.5))
+    elif not o:
+        return jsonify({"ok": False, "error": f"Unknown operation {operation}"}), 404
+    else:
+        oid = o["id"]
 
-# Quick styled smoke test
-@app.route("/health-ui")
-def health_ui():
-    return render_template("dashboard.html", rate_per_piece=RATE_PER_PIECE, APP_BRAND=APP_BRAND)
+    execute("INSERT INTO scans(worker_id, bundle_id, operation_id) VALUES (?,?,?)", (wid, bid, oid))
+    return jsonify({"ok": True})
 
-# =====================================================================
-# Workers CRUD (in-memory placeholders)
-# =====================================================================
-
-@app.route("/workers/create", methods=["POST"])
-def worker_create():
-    form = request.form
-    name = (form.get("name") or "").strip().upper()
-    token_id = (form.get("token_id") or "").strip().upper()
-    department = (form.get("department") or "").strip().upper() or None
-    if not name or not token_id:
-        flash("Name and Token are required.", "error")
-        return redirect(url_for("workers_page"))
-    new_id = (max([w["id"] for w in WORKERS]) + 1) if WORKERS else 1
-    WORKERS.append({"id": new_id, "name": name, "token_id": token_id, "department": department})
-    flash("Worker created.", "success")
-    return redirect(url_for("workers_page"))
-
-@app.route("/workers/<int:wid>/edit", methods=["POST"])
-def worker_edit(wid):
-    form = request.form
-    for w in WORKERS:
-        if w["id"] == wid:
-            w["name"] = (form.get("name") or w["name"]).strip().upper()
-            w["token_id"] = (form.get("token_id") or w["token_id"]).strip().upper()
-            w["department"] = (form.get("department") or w.get("department") or "").strip().upper() or None
-            flash("Worker saved.", "success")
-            break
-    return redirect(url_for("workers_page"))
-
-@app.route("/workers/<int:wid>/delete", methods=["POST"])
-def worker_delete(wid):
-    global WORKERS
-    before = len(WORKERS)
-    WORKERS = [w for w in WORKERS if w["id"] != wid]
-    flash("Worker deleted." if len(WORKERS) < before else "Worker not found.", "success" if len(WORKERS) < before else "error")
-    return redirect(url_for("workers_page"))
-
-@app.route("/workers/<int:wid>/qr.png")
-def worker_qr_png(wid):
-    w = next((x for x in WORKERS if x["id"] == wid), None)
-    if not w:
-        abort(404)
-    payload = f"W:{w['token_id']}"
-    img = qrcode.make(payload)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return send_file(buf, mimetype="image/png")
-
-@app.route("/workers/<int:wid>/print")
-def worker_print(wid):
-    w = next((x for x in WORKERS if x["id"] == wid), None)
-    if not w:
-        abort(404)
-    return render_template("print_qr.html", worker=w)
-
-# Backward-compatible aliases if templates use /worker/... forms
-app.add_url_rule("/worker/create", view_func=worker_create, methods=["POST"])
-app.add_url_rule("/worker/<int:wid>/edit", view_func=worker_edit, methods=["POST"], endpoint="worker_edit")
-app.add_url_rule("/worker/<int:wid>/delete", view_func=worker_delete, methods=["POST"], endpoint="worker_delete")
-app.add_url_rule("/worker/<int:wid>/qr.png", view_func=worker_qr_png, methods=["GET"], endpoint="worker_qr_png")
-app.add_url_rule("/worker/<int:wid>/print", view_func=worker_print, methods=["GET"], endpoint="worker_print")
-
-# =====================================================================
-# ESP32 / UI API
-# =====================================================================
-
-@app.post("/api/scan")
-def api_scan():
-    """ESP32 device posts scan events here (secured by X-Device-Secret header)."""
-    authorize_device(request)
-    data = request.get_json(force=True, silent=True) or {}
-    worker_token = (data.get("worker_token") or "").strip().upper()
-    barcode      = (data.get("barcode") or "").strip().upper()
-    operation    = (data.get("operation_code") or "").strip().upper()
-    pieces       = int(data.get("pieces") or 0)
-    if not (worker_token and barcode and operation and pieces > 0):
-        abort(400, description="Missing fields")
-
-    earned = pieces * RATE_PER_PIECE
-    # also push into "recent activities" so dashboard updates immediately
-    RECENT_ACTIVITIES.insert(0, {
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "worker": worker_token,
-        "line": "-",
-        "operation_code": operation,
-        "barcode": barcode
-    })
-    # optional: truncate to a reasonable window
-    if len(RECENT_ACTIVITIES) > 500:
-        del RECENT_ACTIVITIES[500:]
-
-    return jsonify({"ok": True, "earned": earned})
-
-@app.get("/api/workers")
-def api_workers():
-    q = (request.args.get("q") or "").strip().upper()
-    rows = [
-        {"id": w["id"], "token": w["token_id"], "name": w["name"], "department": w.get("department")}
-        for w in WORKERS
-        if not q or q in w["name"].upper() or q in w["token_id"].upper()
-    ]
-    return jsonify(rows)
-
-@app.get("/api/bundles")
-def api_bundles():
-    return jsonify(BUNDLES)
-
-@app.get("/api/stats")
-def api_stats():
-    total_workers = len(WORKERS)
-    scans_today = sum(
-        1 for r in RECENT_ACTIVITIES
-        if datetime.fromisoformat(r["ts"].replace("Z", "")) > datetime.utcnow() - timedelta(days=1)
-    )
-    active_today = total_workers  # replace with real presence if you track it
-    return jsonify({
-        "total_workers": total_workers,
-        "active_today": active_today,
-        "scans_today": scans_today,
-    })
-
-@app.get("/api/activities")
-def api_activities():
-    limit = request.args.get("limit", 100, type=int)
-    rows = paginate(sorted(RECENT_ACTIVITIES, key=lambda r: r["ts"], reverse=True), limit)
-    return jsonify(rows)
-
-# =====================================================================
-# Health / entrypoint
-# =====================================================================
-
-@app.get("/health")
+@app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "ts": datetime.utcnow().isoformat() + "Z"})
+    return jsonify({"status":"ok","time": datetime.now().isoformat()}), 200
 
 if __name__ == "__main__":
-    # Local debug; on Render, Procfile runs: gunicorn app:app
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)

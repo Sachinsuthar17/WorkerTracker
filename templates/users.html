@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Workers</h1>
+<form method="post" class="form-inline">
+  <input name="worker_code" placeholder="Worker Code (e.g. W001)" required>
+  <input name="name" placeholder="Name" required>
+  <input name="department" placeholder="Department">
+  <input name="skill" placeholder="Skill">
+  <input name="hourly_rate" type="number" step="0.01" placeholder="Hourly Rate">
+  <button type="submit">Add Worker</button>
+</form>
+
+<table class="table">
+  <thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Dept</th><th>Skill</th><th>QR</th><th></th></tr></thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.id }}</td>
+      <td>{{ u.worker_code }}</td>
+      <td>{{ u.name }}</td>
+      <td>{{ u.department or '' }}</td>
+      <td>{{ u.skill or '' }}</td>
+      <td><img src="{{ url_for('worker_qr', uid=u.id) }}" width="80"></td>
+      <td>
+        <form action="{{ url_for('users_delete', uid=u.id) }}" method="post" onsubmit="return confirm('Delete?')">
+          <button>Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

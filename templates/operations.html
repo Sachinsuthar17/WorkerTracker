@@ -1,41 +1,20 @@
-{% extends "layout.html" %}
+{% extends "base.html" %}
 {% block content %}
-<header class="page-header"><h1>Operations</h1></header>
+<h1>Operations (OB)</h1>
+<form method="post" class="form-inline">
+  <input name="op_no" placeholder="Op No (e.g. 5077)" required>
+  <input name="description" placeholder="Description">
+  <input name="section" placeholder="Section">
+  <input name="std_min" type="number" step="0.01" placeholder="Std Min">
+  <button type="submit">Add Operation</button>
+</form>
 
-<div class="card">
-  <form id="f-add" class="row" onsubmit="return false;">
-    <input name="code" placeholder="Code (e.g. OP10)" required class="code">
-    <input name="description" placeholder="Description">
-    <input name="rate_per_piece" placeholder="Rate" type="number" step="0.01" min="0">
-    <button class="btn">Add</button>
-  </form>
-</div>
-<div style="height:12px;"></div>
-
-<div class="card">
-  <div class="muted">All operations</div>
-  <div style="height:8px;"></div>
-  <div style="overflow:auto;">
-    <table>
-      <thead><tr><th>Code</th><th>Description</th><th class="right">Rate</th></tr></thead>
-      <tbody>
-        {% for o in operations %}
-        <tr>
-          <td class="code">{{ o.code }}</td>
-          <td>{{ o.description or "" }}</td>
-          <td class="right">{{ o.rate_per_piece if o.rate_per_piece is not none else "" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<script>
-  document.querySelector("#f-add").addEventListener("submit", async (e)=>{
-    const fd = new FormData(e.target);
-    const r = await fetch("/operations/add", {method:"POST", body:fd});
-    if(r.ok){ location.reload(); } else { alert(await r.text()); }
-  });
-</script>
+<table class="table">
+  <thead><tr><th>Op No</th><th>Description</th><th>Section</th><th>Std Min</th></tr></thead>
+  <tbody>
+    {% for o in operations %}
+    <tr><td>{{ o.op_no }}</td><td>{{ o.description or '' }}</td><td>{{ o.section or '' }}</td><td>{{ o.std_min }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
 {% endblock %}

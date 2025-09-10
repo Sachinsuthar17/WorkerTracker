@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Assign Task</h1>
+<form method="post" class="form-inline">
+  <select name="worker_id" required>
+    <option value="">Select Worker</option>
+    {% for w in workers %}
+      <option value="{{ w.id }}">{{ w.name }} ({{ w.worker_code }})</option>
+    {% endfor %}
+  </select>
+  <input name="description" placeholder="Task description" required style="flex:1">
+  <button type="submit">Assign</button>
+</form>
+
+<h2>Open / Recent Tasks</h2>
+<table class="table">
+  <thead><tr><th>When</th><th>Worker</th><th>Description</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+    {% for t in tasks %}
+    <tr>
+      <td>{{ t.created_at }}</td>
+      <td>{{ t.name }}</td>
+      <td>{{ t.description }}</td>
+      <td>{{ t.status }}</td>
+      <td>
+        {% if t.status != 'DONE' %}
+        <form action="{{ url_for('complete_task', tid=t.id) }}" method="post">
+          <button>Mark done</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

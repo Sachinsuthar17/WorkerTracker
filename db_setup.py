@@ -1,121 +1,104 @@
 import os
-import sqlite3
+from sqlalchemy import create_engine, text
 
-# Allow external callers to pass a specific DB path; otherwise resolve here.
-def _resolve_db_path():
-    url = os.getenv("DATABASE_URL")
-    if url:
-        target = url
-    else:
-        candidate_dirs = ["/opt/render/data",
-                          os.path.dirname(os.path.abspath(__file__)),
-                          "/tmp"]
-        target = None
-        for d in candidate_dirs:
-            try:
-                os.makedirs(d, exist_ok=True)
-                target = os.path.join(d, "factory.db")
-                break
-            except Exception:
-                continue
-        if target is None:
-            target = os.path.abspath("factory.db")
+def init_db(db_url: str | None = None):
+    """
+    Create all tables and defaults if they do not exist in PostgreSQL.
+    """
+    url = db_url or os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("❌ DATABASE_URL is not set. Please add it in Render dashboard.")
 
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
-    except Exception:
-        target = "/tmp/factory.db"
-        os.makedirs("/tmp", exist_ok=True)
-    return target
+    # Render sometimes gives `postgres://`, need `postgresql://`
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
 
-# Exposed DB_PATH for scripts that import this file directly
-DB_PATH = _resolve_db_path()
+    engine = create_engine(url, future=True)
 
-def init_db(db_path: str | None = None):
-    """Create all tables and defaults if they do not exist."""
-    path = db_path or DB_PATH
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-
-    conn = sqlite3.connect(path)
-    c = conn.cursor()
-
-    # Settings
-    c.execute('''CREATE TABLE IF NOT EXISTS settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        base_rate_per_min REAL DEFAULT 0.50,
-        efficiency_target INTEGER DEFAULT 100,
-        quality_target INTEGER DEFAULT 95
-    )''')
-
-    # Users
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_code TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        department TEXT,
-        skill TEXT,
-        hourly_rate REAL DEFAULT 0,
-        qr_code TEXT UNIQUE
-    )''')
-
-    # Bundles
-    c.execute('''CREATE TABLE IF NOT EXISTS bundles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        bundle_code TEXT UNIQUE NOT NULL,
-        style TEXT,
-        color TEXT,
-        size_range TEXT,
-        quantity INTEGER DEFAULT 0,
-        current_op TEXT,
-        qr_code TEXT UNIQUE
-    )''')
-
-    # Operations
-    c.execute('''CREATE TABLE IF NOT EXISTS operations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        op_no TEXT UNIQUE NOT NULL,
-        description TEXT,
-        section TEXT,
-        std_min REAL DEFAULT 0
-    )''')
-
-    # Scans
-    c.execute('''CREATE TABLE IF NOT EXISTS scans (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_id INTEGER NOT NULL,
-        bundle_id INTEGER NOT NULL,
-        operation_id INTEGER NOT NULL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(worker_id) REFERENCES users(id),
-        FOREIGN KEY(bundle_id) REFERENCES bundles(id),
-        FOREIGN KEY(operation_id) REFERENCES operations(id)
-    )''')
-
-    # Tasks
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_id INTEGER NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'OPEN',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(worker_id) REFERENCES users(id)
-    )''')
-
-    # Defaults & Indexes
-    c.execute("""
-        INSERT OR IGNORE INTO settings
-        (id, base_rate_per_min, efficiency_target, quality_target)
+    schema = [
+        # ---------------- Settings ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            base_rate_per_min REAL DEFAULT 0.50,
+            efficiency_target INTEGER DEFAULT 100,
+            quality_target INTEGER DEFAULT 95
+        )
+        """,
+        # ---------------- Users ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            worker_code TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            department TEXT,
+            skill TEXT,
+            hourly_rate REAL DEFAULT 0,
+            qr_code TEXT UNIQUE
+        )
+        """,
+        # ---------------- Bundles ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS bundles (
+            id SERIAL PRIMARY KEY,
+            bundle_code TEXT UNIQUE NOT NULL,
+            style TEXT,
+            color TEXT,
+            size_range TEXT,
+            quantity INTEGER DEFAULT 0,
+            current_op TEXT,
+            qr_code TEXT UNIQUE
+        )
+        """,
+        # ---------------- Operations ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS operations (
+            id SERIAL PRIMARY KEY,
+            op_no TEXT UNIQUE NOT NULL,
+            description TEXT,
+            section TEXT,
+            std_min REAL DEFAULT 0
+        )
+        """,
+        # ---------------- Scans ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS scans (
+            id SERIAL PRIMARY KEY,
+            worker_id INTEGER NOT NULL REFERENCES users(id),
+            bundle_id INTEGER NOT NULL REFERENCES bundles(id),
+            operation_id INTEGER NOT NULL REFERENCES operations(id),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # ---------------- Tasks ---------------- #
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id SERIAL PRIMARY KEY,
+            worker_id INTEGER NOT NULL REFERENCES users(id),
+            description TEXT NOT NULL,
+            status TEXT DEFAULT 'OPEN',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # ---------------- Defaults ---------------- #
+        """
+        INSERT INTO settings (id, base_rate_per_min, efficiency_target, quality_target)
         VALUES (1, 0.50, 100, 95)
-    """)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        # ---------------- Indexes ---------------- #
+        "CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scans_bundle ON scans(bundle_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scans_operation ON scans(operation_id)"
+    ]
 
-    c.execute('CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans(worker_id)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_scans_bundle ON scans(bundle_id)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_scans_operation ON scans(operation_id)')
+    with engine.begin() as conn:
+        for stmt in schema:
+            conn.execute(text(stmt))
 
-    conn.commit()
-    conn.close()
+    print("✅ Database schema ensured at", url)
+
 
 if __name__ == "__main__":
-    init_db(DB_PATH)
-    print("✅ Database initialized at", DB_PATH)
+    init_db()

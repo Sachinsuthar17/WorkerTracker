@@ -1,6 +1,16 @@
+import os
 import sqlite3
 
-DB_PATH = "factory.db"
+# Pick a writable directory for Render or local dev
+default_data_dir = '/opt/render/data'
+try:
+    os.makedirs(default_data_dir, exist_ok=True)
+except Exception:
+    default_data_dir = '/tmp'
+    os.makedirs(default_data_dir, exist_ok=True)
+
+default_db = os.path.join(default_data_dir, 'factory.db')
+DB_PATH = os.getenv('DATABASE_URL', default_db)
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -69,7 +79,11 @@ def init_db():
     )''')
 
     # Ensure there is exactly one settings row
-    c.execute("INSERT OR IGNORE INTO settings(id, base_rate_per_min, efficiency_target, quality_target) VALUES (1, 0.50, 100, 95)")
+    c.execute("""
+        INSERT OR IGNORE INTO settings
+        (id, base_rate_per_min, efficiency_target, quality_target)
+        VALUES (1, 0.50, 100, 95)
+    """)
 
     # Indexes
     c.execute('CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)')

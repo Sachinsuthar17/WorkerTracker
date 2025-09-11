@@ -1,76 +1,133 @@
-# Garment ERP – Worker Per Piece Tracking
+# 🏭 Production Dashboard - Complete Multi-Page Application
 
-This project implements a simplified worker‐per‐piece tracking system inspired
-by the provided UI mockups.  It consists of a Flask web application backed
-by PostgreSQL, QR code generation utilities, a small ESP32 sketch for
-scanning workers and bundles, and helper scripts for database setup and
-deployment.
+A modern, dark-themed production tracking dashboard with full CRUD functionality for workers, operations, and production logging.
 
-## Quick start (local)
+## ✨ Features
 
-1. Ensure you have PostgreSQL running and create a database:
+### 📊 Dashboard
+- Real-time production statistics
+- Interactive Chart.js visualizations
+- Live activity feed
+- Modern dark theme UI
 
-   ```bash
-   createdb garment_erp
-   ```
+### 👥 Workers Management
+- Add new workers with departments
+- View all workers in a formatted table
+- Track worker status and creation dates
 
-2. Export environment variables for the database and optionally the secret key:
+### ⚙️ Operations Management
+- Define operation types (Cutting, Sewing, etc.)
+- Add descriptions for each operation
+- Manage production workflow steps
 
-   ```bash
-   export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/garment_erp
-   export SECRET_KEY=supersecret
-   ```
+### 📈 Production Logging
+- Log production entries by worker and operation
+- Track quantities and timestamps
+- View recent production history
 
-3. Install dependencies:
+### 📋 Reports
+- Export production data as CSV
+- Download complete production logs
+- Worker and operation analytics
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 🔧 Settings
+- System configuration (placeholder)
+- Notification preferences
+- Database status monitoring
 
-4. Initialise the database and seed sample data (workers, bundles and
-   operations).  This will also generate QR codes in `static/qrcodes/`.
+## 🚀 Quick Start
 
-   ```bash
-   python db_setup.py
-   ```
+### Local Development
+```bash
+# Clone and setup
+git clone <your-repo>
+cd production-dashboard
 
-5. Run the development server:
+# Install dependencies
+pip install -r requirements.txt
 
-   ```bash
-   python app.py
-   ```
+# Run the application
+python app.py
 
-6. Visit [http://localhost:5000](http://localhost:5000) in your browser to see
-   the dashboard and manage data.
+# Visit http://localhost:10000
+```
 
-## Deployment (Render/Heroku)
+### Deploy to Render (Free!)
+1. Push code to GitHub
+2. Connect repository to Render
+3. Set build command: `pip install -r requirements.txt`
+4. Set start command: `gunicorn app:app`
+5. Deploy and get your live URL!
 
-The repository includes a `Procfile` for Heroku/Render and a `render.yaml`
-configuration.  Set the `DATABASE_URL` environment variable to point at
-your hosted PostgreSQL database and, optionally, `SECRET_KEY`.  The service
-will install dependencies via `pip`, then launch using gunicorn.
+## 📁 Project Structure
+```
+production-dashboard/
+├── app.py                 # Flask backend with all routes
+├── requirements.txt       # Python dependencies
+├── Procfile              # Render deployment config
+├── templates/
+│   ├── layout.html       # Base template with sidebar
+│   ├── dashboard.html    # Dashboard with charts
+│   ├── workers.html      # Workers management
+│   ├── operations.html   # Operations management
+│   ├── production.html   # Production logging
+│   ├── reports.html      # Reports and exports
+│   └── settings.html     # Settings page
+└── static/
+    ├── style.css         # Modern dark theme styles
+    └── app.js            # Interactive JavaScript
+```
 
-## ESP32 Scanner
+## 🎨 Design Features
+- **Modern Dark Theme**: Professional gradient backgrounds
+- **Glassmorphism Effects**: Subtle blur and transparency
+- **Responsive Layout**: Works on desktop, tablet, and mobile
+- **Interactive Charts**: Chart.js with smooth animations
+- **Live Updates**: Real-time data refresh every 30 seconds
 
-The `ESP32/esp32_scan_post.ino` sketch demonstrates how to scan two QR
-codes (worker and bundle) and post them to the `/scan` endpoint of the
-server.  Configure the WiFi credentials and server URL at the top of the
-sketch.  The example uses `Serial2` for a serial QR scanner and a TFT
-display for user prompts.
+## 🛠️ Technology Stack
+- **Backend**: Flask, SQLite
+- **Frontend**: HTML5, CSS3, JavaScript
+- **Charts**: Chart.js
+- **Icons**: Font Awesome
+- **Deployment**: Gunicorn, Render
 
-## Project structure
+## 📊 Database Schema
+- **workers**: id, name, department, status, created_at
+- **operations**: id, name, description, created_at
+- **production_logs**: id, worker_id, operation_id, quantity, timestamp, status
 
-- `app.py` – Flask application with routes for dashboard, users, bundles,
-  task assignment, scan ingestion, SSE events and report download.
-- `models.py` – SQLAlchemy models representing users, bundles, operations,
-  scans and tasks.
-- `config.py` – Configuration class with sensible defaults for PostgreSQL.
-- `db_setup.py` – One‐off script to create tables and seed initial data.
-- `qr_utils.py` – Helpers for generating QR codes for workers and bundles.
-- `templates/` – Jinja templates for rendering the UI.
-- `static/css/style.css` – Dark‐mode stylesheet mirroring the mockups.
-- `static/js/app.js` – Placeholder for custom JavaScript.
-- `ESP32/esp32_scan_post.ino` – Example Arduino sketch for scanning and posting.
-- `requirements.txt` – Python dependencies, pinned to specific versions.
-- `Procfile` – Process definition for deploying to Heroku/Render.
-- `render.yaml` – Render service configuration.
+## 🔧 API Endpoints
+- `GET /` - Dashboard
+- `GET /workers` - Workers management
+- `GET /operations` - Operations management
+- `GET /production` - Production logging
+- `GET /reports` - Reports page
+- `GET /settings` - Settings page
+- `GET /api/stats` - Production statistics
+- `GET /api/chart-data` - Chart data
+- `GET /download_report` - CSV export
+
+## 📱 Mobile Support
+- Responsive design with mobile-first approach
+- Collapsible sidebar navigation
+- Touch-friendly forms and buttons
+- Optimized for mobile screens
+
+## 🚀 Deployment Options
+- **Render.com** (Free tier available)
+- **Heroku** (With Procfile included)
+- **DigitalOcean App Platform**
+- **Local development server**
+
+## 🤝 Contributing
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## 📄 License
+MIT License - Open source and free to use
+
+---
+**Built with ❤️ for modern production tracking**

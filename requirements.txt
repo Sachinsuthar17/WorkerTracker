@@ -1,7 +1,9 @@
-Flask==3.0.3
-Flask-SQLAlchemy==3.1.1
-psycopg2-binary==2.9.9
-pandas==2.2.2
-openpyxl==3.1.5
+flask==2.3.3
+flask-cors==4.0.0
+gunicorn==21.2.0
 qrcode==7.4.2
-gunicorn==22.0.0
+segno
+psycopg2-binary
+
+
+

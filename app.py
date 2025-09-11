@@ -1,312 +1,393 @@
-"""Main Flask application for the Garment ERP system.
-
-This module wires together the SQLAlchemy models, configures routes for the
-web UI and JSON API, and serves HTML templates.  It also exposes an
-``/events`` endpoint using Server-Sent Events (SSE) to push live updates of
-daily scan counts to the browser.
-"""
-
+from flask import Flask, render_template, redirect, url_for, request, jsonify, Response, abort
+from flask_cors import CORS
+import psycopg2
+import psycopg2.extras
+import io
 import os
+import csv
 from datetime import datetime
-from flask import (
-    Flask,
-    render_template,
-    request,
-    redirect,
-    url_for,
-    jsonify,
-    send_file,
-    Response,
-)
-from sqlalchemy import desc
+import qrcode
+import qrcode.image.svg
 
-from config import Config
-from models import db, User, Bundle, Operation, Task, Scan
-from qr_utils import make_worker_qr, make_bundle_qr
-
-
+# ---------------- APP & CORS ---------------- #
 app = Flask(__name__)
-app.config.from_object(Config)
-db.init_app(app)
+CORS(app)
 
+# ---------------- CONFIG ---------------- #
+DB_URL = os.getenv("DATABASE_URL")
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL is not set. Add it in Render → Environment.")
 
-def _current_day_start() -> datetime:
-    """Return the start of the current UTC day (midnight)."""
-    now = datetime.utcnow()
-    return datetime(now.year, now.month, now.day)
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
+RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
+def get_conn():
+    # Render Postgres typically requires SSL
+    return psycopg2.connect(DB_URL, sslmode="require")
 
-@app.route("/")
-def index():
-    """Redirect root URL to the dashboard."""
-    return redirect(url_for("dashboard"))
+# ---------------- INIT & MIGRATE DB ---------------- #
+def init_db():
+    """Create tables if they do not exist."""
+    conn = get_conn()
+    cur = conn.cursor()
+    # workers
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS workers (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            department TEXT,
+            token_id TEXT UNIQUE,
+            status TEXT DEFAULT 'active',
+            is_logged_in BOOLEAN DEFAULT FALSE,
+            last_login TIMESTAMPTZ,
+            last_logout TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # operations
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS operations (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # production_logs
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS production_logs (
+            id SERIAL PRIMARY KEY,
+            worker_id INTEGER REFERENCES workers(id),
+            operation_id INTEGER REFERENCES operations(id),
+            quantity INTEGER DEFAULT 1,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'completed'
+        )
+    """)
+    # scan_logs
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scan_logs (
+            id SERIAL PRIMARY KEY,
+            token_id TEXT NOT NULL,
+            scan_type TEXT DEFAULT 'work',
+            scanned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+def migrate_db():
+    """Add columns that might be missing from older deployments."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMPTZ;")
+    cur.execute("ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scan_type TEXT DEFAULT 'work';")
+    conn.commit()
+    conn.close()
 
-@app.route("/dashboard")
+# Initialize + attempt migration on import
+try:
+    init_db()
+    migrate_db()
+except Exception as e:
+    print("DB init/migrate error:", e)
+
+# ---------------- ROUTES ---------------- #
+
+@app.route('/')
 def dashboard():
-    """Render the main dashboard page.
+    return render_template('dashboard.html')
 
-    This view aggregates simple statistics: total workers, total bundles,
-    today's scan count, and approximate earnings (scans * base rate).  It
-    also fetches recent scans for display in a table.
-    """
-    total_workers = User.query.count()
-    total_bundles = Bundle.query.count()
-    today_scans = Scan.query.filter(Scan.timestamp >= _current_day_start()).count()
-    earnings_today = today_scans * 0.50  # base rate per scan
+@app.route('/healthz')
+def healthz():
+    return "ok", 200
 
-    recent = (
-        db.session.query(
-            Scan.timestamp,
-            User.name.label("worker_name"),
-            Operation.sequence.label("operation_sequence"),
+# Workers
+@app.route('/workers')
+def workers():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at
+        FROM workers ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return render_template('workers.html', workers=rows)
+
+@app.route('/add_worker', methods=['POST'])
+def add_worker():
+    name = request.form.get('name', '').strip()
+    department = request.form.get('department', '').strip()
+    token_id = request.form.get('token_id', '').strip()
+    if not name or not token_id:
+        return "Name and Token ID are required", 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            'INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)',
+            (name, department, token_id)
         )
-        .join(User, Scan.worker_id == User.id)
-        .join(Operation, Scan.operation_id == Operation.id)
-        .order_by(desc(Scan.timestamp))
-        .limit(10)
-        .all()
-    )
-    return render_template(
-        "dashboard.html",
-        total_workers=total_workers,
-        total_bundles=total_bundles,
-        active_scans=today_scans,
-        earnings_today=earnings_today,
-        recent=recent,
-    )
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return "Error: Token ID must be unique", 400
+    finally:
+        conn.close()
 
+    return redirect(url_for('workers'))
 
-@app.route("/events")
-def events():
-    """Server-Sent Events (SSE) endpoint for live scan counts.
+# Operations
+@app.route('/operations')
+def operations():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, name, description, created_at
+        FROM operations ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return render_template('operations.html', operations=rows)
 
-    The browser opens an EventSource connection to this endpoint.  Every 5
-    seconds the current day's scan count is sent to the client as JSON.
-    """
+@app.route('/add_operation', methods=['POST'])
+def add_operation():
+    name = request.form.get('name', '').strip()
+    description = request.form.get('description', '').strip()
+    if not name:
+        return "Name is required", 400
 
-    def stream():
-        import time
-        while True:
-            # Rollback any uncommitted session state to avoid stale reads
-            db.session.rollback()
-            cnt = Scan.query.filter(Scan.timestamp >= _current_day_start()).count()
-            yield f"data: {{\"today_scans\": {cnt}}}\n\n"
-            time.sleep(5)
-
-    return Response(stream(), mimetype="text/event-stream")
-
-
-@app.route("/scan", methods=["POST"])
-def scan():
-    """API endpoint for recording scans from an ESP32.
-
-    Expects a JSON payload with ``token_id``, ``bundle_id`` and
-    ``operation_id``.  Looks up the corresponding records and inserts a
-    new ``Scan``.  Returns a simple JSON response with the worker name
-    and IDs used.  If the task exists and is not completed, its status
-    changes to ``in_progress``.
-    """
-    data = request.get_json(force=True)
-    token_id = data.get("token_id")
-    bundle_id = data.get("bundle_id")
-    operation_id = data.get("operation_id")
-
-    # Validate input
-    if not token_id or not bundle_id or not operation_id:
-        return (
-            jsonify({"ok": False, "error": "token_id, bundle_id, operation_id required"}),
-            400,
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            'INSERT INTO operations (name, description) VALUES (%s, %s)',
+            (name, description)
         )
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return "Error: Operation already exists", 400
+    finally:
+        conn.close()
 
-    worker = User.query.filter_by(token_id=str(token_id)).first()
-    bundle = Bundle.query.get(int(bundle_id)) if str(bundle_id).isdigit() else None
-    operation = (
-        Operation.query.get(int(operation_id)) if str(operation_id).isdigit() else None
-    )
-    if not worker or not bundle or not operation:
-        return (
-            jsonify({"ok": False, "error": "Invalid worker/bundle/operation"}),
-            404,
-        )
+    return redirect(url_for('operations'))
 
-    # Insert new Scan
-    scan_record = Scan(
-        worker_id=worker.id,
-        bundle_id=bundle.id,
-        operation_id=operation.id,
-        timestamp=datetime.utcnow(),
-    )
-    db.session.add(scan_record)
+# Production
+@app.route('/production')
+def production():
+    return render_template('production.html')
 
-    # Update task status if applicable
-    task = (
-        Task.query.filter_by(worker_id=worker.id, bundle_id=bundle.id)
-        .order_by(desc(Task.assigned_at))
-        .first()
-    )
-    if task and task.status != "done":
-        task.status = "in_progress"
+@app.route('/add_production', methods=['POST'])
+def add_production():
+    try:
+        worker_id = int(request.form.get('worker_id', '0'))
+        operation_id = int(request.form.get('operation_id', '0'))
+        quantity = int(request.form.get('quantity', '1') or '1')
+    except ValueError:
+        return "Invalid numeric values", 400
 
-    db.session.commit()
-    return jsonify(
-        {
-            "ok": True,
-            "worker": worker.name,
-            "bundle": bundle.id,
-            "operation": operation.sequence,
-        }
-    )
+    if worker_id <= 0 or operation_id <= 0:
+        return "worker_id and operation_id are required", 400
 
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO production_logs (worker_id, operation_id, quantity)
+            VALUES (%s, %s, %s)
+        """, (worker_id, operation_id, quantity))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return f"Failed to add production log: {e}", 500
+    finally:
+        conn.close()
 
-@app.route("/users", methods=["GET", "POST"])
-def users():
-    """List and create users.
+    return redirect(url_for('production'))
 
-    ``GET`` renders a table of existing users with their QR codes.  ``POST``
-    creates a new user from form data and generates a QR code on the fly.
-    """
-    if request.method == "POST":
-        name = request.form.get("name")
-        token_id = request.form.get("token_id")
-        dept = request.form.get("department")
-        new_user = User(name=name, token_id=token_id, department=dept)
-        db.session.add(new_user)
-        db.session.commit()
-        # Create QR after commit to use the assigned ID in the file name
-        path = make_worker_qr(
-            os.path.join("static", "qrcodes"), token_id, f"worker_{new_user.id}.png"
-        )
-        new_user.qr_path = path
-        db.session.commit()
-        return redirect(url_for("users"))
-
-    users = User.query.order_by(User.id.asc()).all()
-    return render_template("users.html", users=users)
-
-
-@app.route("/users/<int:uid>/delete", methods=["POST"])
-def delete_user(uid: int):
-    """Delete a user (worker) from the database."""
-    user = User.query.get_or_404(uid)
-    db.session.delete(user)
-    db.session.commit()
-    return redirect(url_for("users"))
-
-
-@app.route("/bundles", methods=["GET", "POST"])
-def bundles():
-    """Create and list bundles."""
-    if request.method == "POST":
-        order_id = request.form.get("order_id")
-        size = request.form.get("size")
-        color = request.form.get("color")
-        qty = int(request.form.get("qty") or 0)
-        bundle = Bundle(order_id=order_id, size=size, color=color, qty=qty)
-        db.session.add(bundle)
-        db.session.commit()
-        payload = f"{bundle.id}|{bundle.order_id}|{bundle.size}|{bundle.color}"
-        bundle.qr_path = make_bundle_qr(
-            os.path.join("static", "qrcodes"), payload, f"bundle_{bundle.id}.png"
-        )
-        db.session.commit()
-        return redirect(url_for("bundles"))
-
-    bundles = Bundle.query.order_by(Bundle.id.desc()).limit(100).all()
-    return render_template("bundles.html", bundles=bundles)
-
-
-@app.route("/assign_task", methods=["GET", "POST"])
-def assign_task():
-    """Assign bundles to workers.
-
-    ``GET`` displays a form for assigning tasks and shows recent assignments.
-    ``POST`` processes the assignment and returns to the same page.
-    """
-    if request.method == "POST":
-        worker_id = int(request.form.get("worker_id"))
-        bundle_id = int(request.form.get("bundle_id"))
-        task = Task(worker_id=worker_id, bundle_id=bundle_id, status="assigned")
-        db.session.add(task)
-        db.session.commit()
-        return redirect(url_for("assign_task"))
-
-    workers = User.query.all()
-    bundles = Bundle.query.all()
-    tasks = Task.query.order_by(desc(Task.assigned_at)).limit(50).all()
-    return render_template(
-        "assign_task.html", workers=workers, bundles=bundles, tasks=tasks
-    )
-
-
-@app.route("/reports")
+# Reports
+@app.route('/reports')
 def reports():
-    """Display reports page with export links."""
-    return render_template("reports.html")
+    return render_template('reports.html')
 
-
-@app.route("/reports/download")
+@app.route('/download_report')
 def download_report():
-    """Download scan records as CSV or Excel (xlsx)."""
-    kind = request.args.get("kind", "csv")
-    since = request.args.get("since")
-    query = Scan.query
-    if since:
-        try:
-            dt = datetime.fromisoformat(since)
-            query = query.filter(Scan.timestamp >= dt)
-        except ValueError:
-            pass
-    scans = (
-        db.session.query(
-            Scan.id,
-            Scan.timestamp,
-            User.name.label("worker"),
-            Bundle.id.label("bundle"),
-            Operation.sequence.label("operation"),
-        )
-        .join(User, Scan.worker_id == User.id)
-        .join(Bundle, Scan.bundle_id == Bundle.id)
-        .join(Operation, Scan.operation_id == Operation.id)
-        .filter(Scan.id.in_([s.id for s in query]))
-        .order_by(Scan.timestamp.asc())
-        .all()
+    """Download workers + scan count as CSV."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT w.name, w.department, COUNT(s.id) AS total_scans
+        FROM workers w
+        LEFT JOIN scan_logs s ON s.token_id = w.token_id
+        GROUP BY w.id
+        ORDER BY w.name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    si = io.StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["Name", "Department", "Total Scans"])
+    writer.writerows(rows)
+    si.seek(0)
+
+    return Response(
+        si.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=report.csv"}
     )
-    rows = [("id", "timestamp", "worker", "bundle", "operation")]
-    for s in scans:
-        rows.append(
-            (
-                s.id,
-                s.timestamp.isoformat(),
-                s.worker,
-                s.bundle,
-                s.operation,
-            )
-        )
-    if kind == "xlsx":
-        import pandas as pd
-        df = pd.DataFrame(rows[1:], columns=rows[0])
-        fp = "reports_scans.xlsx"
-        df.to_excel(fp, index=False)
-        return send_file(fp, as_attachment=True)
+
+# QR
+@app.route('/qr/<token_id>')
+def qr_code(token_id):
+    factory = qrcode.image.svg.SvgImage
+    img = qrcode.make(token_id, image_factory=factory)
+    stream = io.BytesIO()
+    img.save(stream)
+    return Response(stream.getvalue(), mimetype='image/svg+xml')
+
+# Scan API
+@app.route('/scan', methods=['POST'])
+def scan():
+    data = request.get_json(silent=True) or {}
+    token_id = data.get('token_id')
+    secret = data.get('secret')
+    scan_type = data.get('scan_type', 'work')
+
+    if not token_id or not secret:
+        return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
+    if secret != DEVICE_SECRET:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute('SELECT * FROM workers WHERE token_id = %s', (token_id,))
+    worker = cur.fetchone()
+    if not worker:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
+
+    cur.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
+
+    message = ""
+    is_logged_in = worker['is_logged_in']
+    if scan_type == "login":
+        cur.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
+        message = "Login successful"
+        is_logged_in = True
+    elif scan_type == "logout":
+        cur.execute("UPDATE workers SET is_logged_in = FALSE, last_logout = NOW() WHERE token_id = %s", (token_id,))
+        message = "Logout successful"
+        is_logged_in = False
     else:
-        fp = "reports_scans.csv"
-        import csv
-        with open(fp, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerows(rows)
-        return send_file(fp, as_attachment=True, download_name="reports_scans.csv")
+        message = "Work scan logged"
 
+    cur.execute("""
+        SELECT COUNT(*) FROM scan_logs
+        WHERE token_id = %s AND scan_type = 'work' AND DATE(scanned_at) = CURRENT_DATE
+    """, (token_id,))
+    scans_today = cur.fetchone()[0]
 
-@app.context_processor
-def inject_now():
-    """Inject current UTC timestamp into templates for cache busting."""
-    return {"now": datetime.utcnow()}
+    earnings = scans_today * RATE_PER_PIECE
 
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'status': 'success',
+        'message': message,
+        'name': worker['name'],
+        'department': worker['department'],
+        'is_logged_in': is_logged_in,
+        'scans_today': scans_today,
+        'earnings': earnings
+    })
+
+# Dashboard JSON
+@app.route('/api/stats')
+def api_stats():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM workers")
+    workers_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM operations")
+    operations_count = cur.fetchone()[0]
+    cur.execute("""
+        SELECT COUNT(*) FROM scan_logs
+        WHERE scan_type = 'work' AND DATE(scanned_at) = CURRENT_DATE
+    """)
+    scans_today = cur.fetchone()[0]
+    conn.close()
+    return jsonify({
+        "workers": workers_count,
+        "operations": operations_count,
+        "scans_today": scans_today,
+        "estimated_earnings_today_total": scans_today * RATE_PER_PIECE
+    })
+
+@app.route('/api/chart-data')
+def api_chart_data():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        WITH days AS (
+            SELECT generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day')::date AS d
+        )
+        SELECT d AS day,
+               COALESCE((
+                    SELECT COUNT(*) FROM scan_logs s
+                    WHERE DATE(s.scanned_at) = d AND s.scan_type = 'work'
+                ), 0) AS cnt
+        FROM days
+        ORDER BY day
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    labels = [r[0].isoformat() for r in rows]
+    values = [int(r[1]) for r in rows]
+    return jsonify({"labels": labels, "values": values})
+
+@app.route('/api/activities')
+def api_activities():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("""
+        SELECT s.id, s.token_id, s.scan_type, s.scanned_at, w.name AS worker_name, w.department
+        FROM scan_logs s
+        LEFT JOIN workers w ON w.token_id = s.token_id
+        ORDER BY s.scanned_at DESC
+        LIMIT 20
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        items.append({
+            "id": r["id"],
+            "token_id": r["token_id"],
+            "scan_type": r["scan_type"],
+            "scanned_at": r["scanned_at"].isoformat() if r["scanned_at"] else None,
+            "worker_name": r["worker_name"],
+            "department": r["department"]
+        })
+    return jsonify(items)
+
+# Admin migration
+@app.route('/admin/migrate')
+def admin_migrate():
+    secret = request.args.get("secret")
+    if secret != DEVICE_SECRET:
+        abort(403)
+    try:
+        migrate_db()
+        return "Migration complete ✅", 200
+    except Exception as e:
+        return f"Migration error: {e}", 500
 
 if __name__ == "__main__":
-    # Ensure tables exist when running directly
-    with app.app_context():
-        db.create_all()
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000, debug=True)

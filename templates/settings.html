@@ -1,0 +1,103 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header class="page-header">
+    <h1>Settings</h1>
+    <p>Configure your production tracking system</p>
+</header>
+
+<!-- Settings Section -->
+<section class="settings-section">
+    <div class="settings-grid">
+        <!-- General Settings -->
+        <div class="settings-card">
+            <div class="settings-header">
+                <i class="fas fa-cog"></i>
+                <h3>General Settings</h3>
+            </div>
+            <div class="settings-content">
+                <div class="setting-item">
+                    <label>Company Name</label>
+                    <input type="text" value="Production Tracker" disabled>
+                </div>
+                <div class="setting-item">
+                    <label>Time Zone</label>
+                    <select disabled>
+                        <option>UTC+00:00</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label>Language</label>
+                    <select disabled>
+                        <option>English</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Settings -->
+        <div class="settings-card">
+            <div class="settings-header">
+                <i class="fas fa-bell"></i>
+                <h3>Notifications</h3>
+            </div>
+            <div class="settings-content">
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" checked disabled>
+                        <span class="toggle-slider"></span>
+                        Email Notifications
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" disabled>
+                        <span class="toggle-slider"></span>
+                        SMS Alerts
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" checked disabled>
+                        <span class="toggle-slider"></span>
+                        Dashboard Alerts
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Settings -->
+        <div class="settings-card">
+            <div class="settings-header">
+                <i class="fas fa-server"></i>
+                <h3>System</h3>
+            </div>
+            <div class="settings-content">
+                <div class="setting-item">
+                    <label>Database Status</label>
+                    <span class="status-badge active">Connected</span>
+                </div>
+                <div class="setting-item">
+                    <label>Version</label>
+                    <span>v1.0.0</span>
+                </div>
+                <div class="setting-item">
+                    <label>Last Backup</label>
+                    <span>Auto-backup enabled</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Coming Soon Notice -->
+<section class="notice-section">
+    <div class="notice-card">
+        <i class="fas fa-info-circle"></i>
+        <div class="notice-content">
+            <h3>Settings Coming Soon</h3>
+            <p>Advanced settings and configuration options will be available in future updates. Current settings are read-only for demonstration purposes.</p>
+        </div>
+    </div>
+</section>
+{% endblock %}

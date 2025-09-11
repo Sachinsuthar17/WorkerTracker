@@ -1,65 +1,80 @@
 {% extends "layout.html" %}
 
 {% block content %}
-  <h1>Production Dashboard</h1>
-  <div class="cards">
-    <div class="card">
-      <div class="card-title">Active Orders</div>
-      <div class="card-value">{{ total_bundles }}</div>
+<header class="main-header">
+    <div class="header-title">
+        <h1>Production Dashboard</h1>
+        <div class="live-indicator">
+            <span class="live-dot"></span>
+            Live
+        </div>
     </div>
-    <div class="card">
-      <div class="card-title">Active Bundles</div>
-      <div class="card-value">{{ total_bundles }}</div>
+    <div class="header-actions">
+        <button class="btn-secondary">
+            <i class="fas fa-download"></i>
+            Export
+        </button>
+        <div class="user-profile">
+            <i class="fas fa-user-circle"></i>
+            <span>Admin</span>
+        </div>
     </div>
-    <div class="card">
-      <div class="card-title">Active Workers</div>
-      <div class="card-value">{{ total_workers }}</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Today's Scans</div>
-      <div class="card-value" id="today-scans">{{ active_scans }}</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Today's Earnings</div>
-      <div class="card-value">${{ '%.2f' % earnings_today }}</div>
-    </div>
-  </div>
+</header>
 
-  <h2>Recent Activities</h2>
-  <table class="table">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Worker</th>
-        <th>Operation</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for ts, worker_name, op_seq in recent %}
-      <tr>
-        <td>{{ ts }}</td>
-        <td>{{ worker_name }}</td>
-        <td>{{ op_seq }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<!-- Stats Cards -->
+<section class="stats-section">
+    <div class="stats-grid" id="statsGrid">
+        <!-- Stats will be loaded here by JavaScript -->
+    </div>
+</section>
 
-  <script>
-    // Live update today's scans via Server-Sent Events.  The browser will
-    // automatically reconnect if the connection drops.  The count is
-    // replaced when a new message is received.
-    (function () {
-      var el = document.getElementById('today-scans');
-      try {
-        var src = new EventSource('/events');
-        src.onmessage = function (ev) {
-          var data = JSON.parse(ev.data);
-          el.textContent = data.today_scans;
-        };
-      } catch (e) {
-        console.warn('SSE not available:', e);
-      }
-    })();
-  </script>
+<!-- Charts Section -->
+<section class="charts-section">
+    <div class="charts-grid">
+        <!-- Daily Production Trend -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <h3>Daily Production Trend</h3>
+                <div class="chart-controls">
+                    <button class="chart-btn active">7D</button>
+                    <button class="chart-btn">30D</button>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="productionChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Worker Performance -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <h3>Worker Performance</h3>
+                <div class="chart-legend">
+                    <span class="legend-item">
+                        <span class="legend-dot" style="background: #3b82f6;"></span>
+                        Worker Efficiency
+                    </span>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="workerChart"></canvas>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Recent Activities -->
+<section class="activities-section">
+    <div class="activities-card">
+        <div class="activities-header">
+            <h3>Recent Activities</h3>
+            <button class="btn-text">View All</button>
+        </div>
+        <div class="activities-list" id="activitiesList">
+            <!-- Activities will be loaded here -->
+        </div>
+    </div>
+</section>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

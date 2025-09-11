@@ -10,12 +10,11 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev")
 
 db_url = os.getenv("DATABASE_URL", "sqlite:///garment.db")
-# Normalize legacy scheme and force psycopg driver for SQLAlchemy if using Postgres
+# Normalize legacy scheme (Render/Heroku)
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
-if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
-    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
+# NOTE: We do NOT force +psycopg here, so SQLAlchemy will use psycopg2-binary you already installed.
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["DEVICE_SECRET"] = os.getenv("DEVICE_SECRET", "garment_erp_2024_secret")
@@ -361,6 +360,7 @@ def export_production():
 
 # ---------------- One-time DB bootstrap (Flask 3.x safe) ----------------
 _initialized = False
+
 @app.before_request
 def _init_once():
     global _initialized

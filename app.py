@@ -1,19 +1,18 @@
 import os
-from datetime import datetime, date, time, timedelta
-from flask import Flask, jsonify, request, render_template, send_from_directory, Response
+from datetime import datetime, time
+from flask import Flask, jsonify, request, render_template, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 import io, csv
 
+# ---------------- App & DB config ----------------
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev")
 
-# ---- Database URL handling (Render/Heroku safe; psycopg v3 driver) ----
 db_url = os.getenv("DATABASE_URL", "sqlite:///garment.db")
-# Normalize legacy scheme
+# Normalize legacy scheme and force psycopg driver for SQLAlchemy if using Postgres
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
-# Force SQLAlchemy to use psycopg v3 driver when pointing at Postgres
 if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
     db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -25,7 +24,7 @@ app.config["RATE_PER_PIECE"] = float(os.getenv("RATE_PER_PIECE", "25"))
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# ---------- Models ----------
+# ---------------- Models ----------------
 class Setting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     base_rate_per_min = db.Column(db.Float, default=0.5)
@@ -86,7 +85,7 @@ class ProductionLog(db.Model):
     status = db.Column(db.String(32), default="COMPLETED")
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-# ---------- Pages ----------
+# ---------------- Page routes ----------------
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
@@ -119,7 +118,7 @@ def bundle_management():
 def live_scanning():
     return render_template("live.html")
 
-# ---------- ESP32 scan endpoint ----------
+# ---------------- ESP32 scan endpoint ----------------
 @app.post("/api/scan")
 def api_scan():
     data = request.get_json(silent=True) or {}
@@ -188,7 +187,7 @@ def api_scan():
         }
     )
 
-# ---------- JSON APIs for SPA ----------
+# ---------------- JSON APIs for SPA ----------------
 @app.get("/api/stats")
 def api_stats():
     workers = Worker.query.count()
@@ -219,7 +218,6 @@ def api_stats():
 
 @app.get("/api/activities")
 def api_activities():
-    # last 50 scans joined with worker
     items = (
         db.session.query(ScanLog, Worker)
         .join(Worker, ScanLog.token_id == Worker.token_id, isouter=True)
@@ -330,7 +328,7 @@ def add_production():
     db.session.commit()
     return ("", 204)
 
-# CSV exports
+# ---------------- CSV exports ----------------
 @app.get("/api/export/workers.csv")
 def export_workers():
     out = io.StringIO()
@@ -338,7 +336,8 @@ def export_workers():
     w.writerow(["ID", "WorkerID", "Name", "Department", "Rate", "Line", "Token", "Created"])
     for x in Worker.query.order_by(Worker.name).all():
         w.writerow([x.id, x.worker_id, x.name, x.department, x.rate, x.line, x.token_id, x.created_at])
-    return Response(out.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=workers.csv"})
+    return Response(out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment;filename=workers.csv"})
 
 @app.get("/api/export/scans.csv")
 def export_scans():
@@ -347,7 +346,8 @@ def export_scans():
     w.writerow(["ID", "Token", "Type", "Bundle", "Operation", "Time"])
     for s in ScanLog.query.order_by(ScanLog.scanned_at.desc()).all():
         w.writerow([s.id, s.token_id, s.scan_type, s.bundle_code, s.operation_code, s.scanned_at])
-    return Response(out.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=scans.csv"})
+    return Response(out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment;filename=scans.csv"})
 
 @app.get("/api/export/production.csv")
 def export_production():
@@ -356,11 +356,11 @@ def export_production():
     w.writerow(["ID", "WorkerID", "OperationID", "Quantity", "Status", "Timestamp"])
     for p in ProductionLog.query.order_by(ProductionLog.timestamp.desc()).all():
         w.writerow([p.id, p.worker_id, p.operation_id, p.quantity, p.status, p.timestamp])
-    return Response(out.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=production.csv"})
+    return Response(out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment;filename=production.csv"})
 
-# ---------- One-time DB bootstrap (Flask 3.x safe) ----------
+# ---------------- One-time DB bootstrap (Flask 3.x safe) ----------------
 _initialized = False
-
 @app.before_request
 def _init_once():
     global _initialized
@@ -369,8 +369,7 @@ def _init_once():
     with app.app_context():
         db.create_all()
         if not Setting.query.first():
-            db.session.add(Setting())
-            db.session.commit()
+            db.session.add(Setting()); db.session.commit()
         if not Worker.query.first():
             db.session.add(Worker(name="Rajesh Kumar", department="SLEEVE", token_id="5001"))
             db.session.add(Worker(name="Priya Sharma", department="BODY", token_id="5077"))
@@ -382,4 +381,4 @@ def _init_once():
     _initialized = True
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)

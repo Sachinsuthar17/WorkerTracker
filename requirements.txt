@@ -1,9 +1,5 @@
-flask==2.3.3
-flask-cors==4.0.0
-gunicorn==21.2.0
-qrcode==7.4.2
-segno
-psycopg2-binary
-
-
-
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+gunicorn==22.0.0
+python-dotenv==1.0.1

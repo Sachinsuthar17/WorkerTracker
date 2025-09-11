@@ -5,15 +5,13 @@ import psycopg2.extras
 import io
 import os
 import csv
-from datetime import datetime
 import qrcode
 import qrcode.image.svg
 
-# ---------------- APP & CORS ---------------- #
 app = Flask(__name__)
 CORS(app)
 
-# ---------------- CONFIG ---------------- #
+# ---- SETTINGS ----
 RAW_ENV_DB_URL = os.getenv("DATABASE_URL")
 if not RAW_ENV_DB_URL:
     raise RuntimeError("DATABASE_URL is not set. Add it in Render → Environment.")
@@ -23,10 +21,10 @@ RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
 def _psycopg2_friendly_dsn(url: str) -> str:
     """
-    Convert SQLAlchemy-style URLs (e.g. 'postgresql+psycopg2://...')
-    into plain psycopg2 DSNs (e.g. 'postgresql://...').
-    Also normalize 'postgres://' -> 'postgresql://'
-    and ensure sslmode=require if not present.
+    Make sure the DSN is psycopg2-friendly:
+    - postgres://  -> postgresql://
+    - strip any +driver like postgresql+psycopg2://
+    - ensure sslmode=require if not present
     """
     if not url:
         return ""
@@ -41,14 +39,13 @@ def _psycopg2_friendly_dsn(url: str) -> str:
 DB_URL = _psycopg2_friendly_dsn(RAW_ENV_DB_URL)
 
 def get_conn():
+    # IMPORTANT: do not pass a SQLAlchemy-style URL to psycopg2
     return psycopg2.connect(DB_URL)
 
-# ---------------- INIT & MIGRATE DB ---------------- #
+# ---- DB BOOTSTRAP ----
 def init_db():
-    """Create tables if they do not exist."""
     conn = get_conn()
     cur = conn.cursor()
-    # workers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -62,7 +59,6 @@ def init_db():
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id SERIAL PRIMARY KEY,
@@ -71,7 +67,6 @@ def init_db():
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # production_logs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS production_logs (
             id SERIAL PRIMARY KEY,
@@ -82,7 +77,6 @@ def init_db():
             status TEXT DEFAULT 'completed'
         )
     """)
-    # scan_logs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
             id SERIAL PRIMARY KEY,
@@ -95,7 +89,6 @@ def init_db():
     conn.close()
 
 def migrate_db():
-    """Add columns that might be missing from older deployments."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE;")
@@ -105,41 +98,41 @@ def migrate_db():
     conn.commit()
     conn.close()
 
-# Run init/migrate at import
 try:
     init_db()
     migrate_db()
 except Exception as e:
     print("DB init/migrate error:", e)
 
-# ---------------- ROUTES ---------------- #
+# ---- ROUTES ----
 
-@app.route('/')
+@app.route("/")
 def dashboard():
-    return render_template('dashboard.html')
+    return render_template("dashboard.html")
 
-@app.route('/healthz')
+@app.route("/healthz")
 def healthz():
     return "ok", 200
 
 # Workers
-@app.route('/workers')
+@app.route("/workers")
 def workers():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT id, name, department, token_id, status, is_logged_in, last_login, last_logout, created_at
-        FROM workers ORDER BY created_at DESC
+        FROM workers
+        ORDER BY created_at DESC
     """)
     rows = cur.fetchall()
     conn.close()
-    return render_template('workers.html', workers=rows)
+    return render_template("workers.html", workers=rows)
 
-@app.route('/add_worker', methods=['POST'])
+@app.route("/add_worker", methods=["POST"])
 def add_worker():
-    name = request.form.get('name', '').strip()
-    department = request.form.get('department', '').strip()
-    token_id = request.form.get('token_id', '').strip()
+    name = request.form.get("name", "").strip()
+    department = request.form.get("department", "").strip()
+    token_id = request.form.get("token_id", "").strip()
     if not name or not token_id:
         return "Name and Token ID are required", 400
 
@@ -147,8 +140,8 @@ def add_worker():
     cur = conn.cursor()
     try:
         cur.execute(
-            'INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)',
-            (name, department, token_id)
+            "INSERT INTO workers (name, department, token_id) VALUES (%s, %s, %s)",
+            (name, department, token_id),
         )
         conn.commit()
     except psycopg2.IntegrityError:
@@ -156,26 +149,26 @@ def add_worker():
         return "Error: Token ID must be unique", 400
     finally:
         conn.close()
-
-    return redirect(url_for('workers'))
+    return redirect(url_for("workers"))
 
 # Operations
-@app.route('/operations')
+@app.route("/operations")
 def operations():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT id, name, description, created_at
-        FROM operations ORDER BY created_at DESC
+        FROM operations
+        ORDER BY created_at DESC
     """)
     rows = cur.fetchall()
     conn.close()
-    return render_template('operations.html', operations=rows)
+    return render_template("operations.html", operations=rows)
 
-@app.route('/add_operation', methods=['POST'])
+@app.route("/add_operation", methods=["POST"])
 def add_operation():
-    name = request.form.get('name', '').strip()
-    description = request.form.get('description', '').strip()
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
     if not name:
         return "Name is required", 400
 
@@ -183,8 +176,8 @@ def add_operation():
     cur = conn.cursor()
     try:
         cur.execute(
-            'INSERT INTO operations (name, description) VALUES (%s, %s)',
-            (name, description)
+            "INSERT INTO operations (name, description) VALUES (%s, %s)",
+            (name, description),
         )
         conn.commit()
     except psycopg2.IntegrityError:
@@ -192,20 +185,19 @@ def add_operation():
         return "Error: Operation already exists", 400
     finally:
         conn.close()
-
-    return redirect(url_for('operations'))
+    return redirect(url_for("operations"))
 
 # Production
-@app.route('/production')
+@app.route("/production")
 def production():
-    return render_template('production.html')
+    return render_template("production.html")
 
-@app.route('/add_production', methods=['POST'])
+@app.route("/add_production", methods=["POST"])
 def add_production():
     try:
-        worker_id = int(request.form.get('worker_id', '0'))
-        operation_id = int(request.form.get('operation_id', '0'))
-        quantity = int(request.form.get('quantity', '1') or '1')
+        worker_id = int(request.form.get("worker_id", "0"))
+        operation_id = int(request.form.get("operation_id", "0"))
+        quantity = int(request.form.get("quantity", "1") or "1")
     except ValueError:
         return "Invalid numeric values", 400
 
@@ -225,17 +217,15 @@ def add_production():
         return f"Failed to add production log: {e}", 500
     finally:
         conn.close()
-
-    return redirect(url_for('production'))
+    return redirect(url_for("production"))
 
 # Reports
-@app.route('/reports')
+@app.route("/reports")
 def reports():
-    return render_template('reports.html')
+    return render_template("reports.html")
 
-@app.route('/download_report')
+@app.route("/download_report")
 def download_report():
-    """Download workers + scan count as CSV."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -253,47 +243,46 @@ def download_report():
     writer.writerow(["Name", "Department", "Total Scans"])
     writer.writerows(rows)
     si.seek(0)
-
     return Response(
         si.getvalue(),
         mimetype="text/csv",
-        headers={"Content-Disposition": "attachment;filename=report.csv"}
+        headers={"Content-Disposition": "attachment;filename=report.csv"},
     )
 
 # QR
-@app.route('/qr/<token_id>')
+@app.route("/qr/<token_id>")
 def qr_code(token_id):
     factory = qrcode.image.svg.SvgImage
     img = qrcode.make(token_id, image_factory=factory)
     stream = io.BytesIO()
     img.save(stream)
-    return Response(stream.getvalue(), mimetype='image/svg+xml')
+    return Response(stream.getvalue(), mimetype="image/svg+xml")
 
-# Scan API (ESP32)
-@app.route('/scan', methods=['POST'])
+# ESP32 Scan API
+@app.route("/scan", methods=["POST"])
 def scan():
     data = request.get_json(silent=True) or {}
-    token_id = data.get('token_id')
-    secret = data.get('secret')
-    scan_type = data.get('scan_type', 'work')
+    token_id = data.get("token_id")
+    secret = data.get("secret")
+    scan_type = data.get("scan_type", "work")
 
     if not token_id or not secret:
-        return jsonify({'status': 'error', 'message': 'Missing token_id or secret'}), 400
+        return jsonify({"status": "error", "message": "Missing token_id or secret"}), 400
     if secret != DEVICE_SECRET:
-        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM workers WHERE token_id = %s', (token_id,))
+    cur.execute("SELECT * FROM workers WHERE token_id = %s", (token_id,))
     worker = cur.fetchone()
     if not worker:
         conn.close()
-        return jsonify({'status': 'error', 'message': 'Invalid token_id'}), 404
+        return jsonify({"status": "error", "message": "Invalid token_id"}), 404
 
-    cur.execute('INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)', (token_id, scan_type))
+    cur.execute("INSERT INTO scan_logs (token_id, scan_type) VALUES (%s, %s)", (token_id, scan_type))
 
     message = ""
-    is_logged_in = worker['is_logged_in']
+    is_logged_in = worker["is_logged_in"]
     if scan_type == "login":
         cur.execute("UPDATE workers SET is_logged_in = TRUE, last_login = NOW() WHERE token_id = %s", (token_id,))
         message = "Login successful"
@@ -310,24 +299,23 @@ def scan():
         WHERE token_id = %s AND scan_type = 'work' AND DATE(scanned_at) = CURRENT_DATE
     """, (token_id,))
     scans_today = cur.fetchone()[0]
-
     earnings = scans_today * RATE_PER_PIECE
 
     conn.commit()
     conn.close()
 
     return jsonify({
-        'status': 'success',
-        'message': message,
-        'name': worker['name'],
-        'department': worker['department'],
-        'is_logged_in': is_logged_in,
-        'scans_today': scans_today,
-        'earnings': earnings
+        "status": "success",
+        "message": message,
+        "name": worker["name"],
+        "department": worker["department"],
+        "is_logged_in": is_logged_in,
+        "scans_today": scans_today,
+        "earnings": earnings
     })
 
 # Dashboard JSON
-@app.route('/api/stats')
+@app.route("/api/stats")
 def api_stats():
     conn = get_conn()
     cur = conn.cursor()
@@ -348,7 +336,7 @@ def api_stats():
         "estimated_earnings_today_total": scans_today * RATE_PER_PIECE
     })
 
-@app.route('/api/chart-data')
+@app.route("/api/chart-data")
 def api_chart_data():
     conn = get_conn()
     cur = conn.cursor()
@@ -370,7 +358,7 @@ def api_chart_data():
     values = [int(r[1]) for r in rows]
     return jsonify({"labels": labels, "values": values})
 
-@app.route('/api/activities')
+@app.route("/api/activities")
 def api_activities():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -383,20 +371,17 @@ def api_activities():
     """)
     rows = cur.fetchall()
     conn.close()
-    items = []
-    for r in rows:
-        items.append({
-            "id": r["id"],
-            "token_id": r["token_id"],
-            "scan_type": r["scan_type"],
-            "scanned_at": r["scanned_at"].isoformat() if r["scanned_at"] else None,
-            "worker_name": r["worker_name"],
-            "department": r["department"]
-        })
+    items = [{
+        "id": r["id"],
+        "token_id": r["token_id"],
+        "scan_type": r["scan_type"],
+        "scanned_at": r["scanned_at"].isoformat() if r["scanned_at"] else None,
+        "worker_name": r["worker_name"],
+        "department": r["department"],
+    } for r in rows]
     return jsonify(items)
 
-# Admin migration
-@app.route('/admin/migrate')
+@app.route("/admin/migrate")
 def admin_migrate():
     secret = request.args.get("secret")
     if secret != DEVICE_SECRET:
@@ -408,5 +393,4 @@ def admin_migrate():
         return f"Migration error: {e}", 500
 
 if __name__ == "__main__":
-    # Locally: set DATABASE_URL first if you want Postgres; else this will fail to connect.
     app.run(host="0.0.0.0", port=5000, debug=True)

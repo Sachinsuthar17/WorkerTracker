@@ -1,104 +1,95 @@
-# db_setup.py
+"""Database initialisation and seeding script.
+
+Run this script to create all tables and populate them with initial data.  It
+will also generate QR codes for workers and bundles.  The script uses the
+Flask application context to ensure proper configuration of SQLAlchemy.
+
+Usage::
+
+    python db_setup.py
+
+Environment variables (via ``config.Config``) control the database URL and
+secret key.  This script is idempotent: if data already exists it will
+skip seeding.
+"""
+
 import os
-from sqlalchemy import create_engine, text
+from flask import Flask
+from config import Config
+from models import db, User, Bundle, Operation
+from qr_utils import make_worker_qr, make_bundle_qr
 
-def init_db(db_url: str | None = None):
-    """
-    Create all tables and defaults if they do not exist in PostgreSQL.
-    """
-    url = db_url or os.getenv("DATABASE_URL")
-    if not url:
-        raise RuntimeError("❌ DATABASE_URL is not set. Please add it in Render dashboard.")
 
-    # Render sometimes gives `postgres://`, need `postgresql://`
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
+app = Flask(__name__)
+app.config.from_object(Config)
+db.init_app(app)
 
-    engine = create_engine(url, future=True)
 
-    schema = [
-        # ---------------- Settings ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            base_rate_per_min REAL DEFAULT 0.50,
-            efficiency_target INTEGER DEFAULT 100,
-            quality_target INTEGER DEFAULT 95
-        )
-        """,
-        # ---------------- Users ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            worker_code TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            department TEXT,
-            skill TEXT,
-            hourly_rate REAL DEFAULT 0,
-            qr_code TEXT UNIQUE
-        )
-        """,
-        # ---------------- Bundles ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS bundles (
-            id SERIAL PRIMARY KEY,
-            bundle_code TEXT UNIQUE NOT NULL,
-            style TEXT,
-            color TEXT,
-            size_range TEXT,
-            quantity INTEGER DEFAULT 0,
-            current_op TEXT,
-            qr_code TEXT UNIQUE
-        )
-        """,
-        # ---------------- Operations ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS operations (
-            id SERIAL PRIMARY KEY,
-            op_no TEXT UNIQUE NOT NULL,
-            description TEXT,
-            section TEXT,
-            std_min REAL DEFAULT 0
-        )
-        """,
-        # ---------------- Scans ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS scans (
-            id SERIAL PRIMARY KEY,
-            worker_id INTEGER NOT NULL REFERENCES users(id),
-            bundle_id INTEGER NOT NULL REFERENCES bundles(id),
-            operation_id INTEGER NOT NULL REFERENCES operations(id),
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        # ---------------- Tasks ---------------- #
-        """
-        CREATE TABLE IF NOT EXISTS tasks (
-            id SERIAL PRIMARY KEY,
-            worker_id INTEGER NOT NULL REFERENCES users(id),
-            description TEXT NOT NULL,
-            status TEXT DEFAULT 'OPEN',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        # ---------------- Defaults ---------------- #
-        """
-        INSERT INTO settings (id, base_rate_per_min, efficiency_target, quality_target)
-        VALUES (1, 0.50, 100, 95)
-        ON CONFLICT (id) DO NOTHING
-        """,
-        # ---------------- Indexes ---------------- #
-        "CREATE INDEX IF NOT EXISTS idx_scans_time ON scans(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_worker ON scans(worker_id)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_bundle ON scans(bundle_id)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_operation ON scans(operation_id)"
-    ]
+def init_db() -> None:
+    """Create tables and seed example data if necessary."""
 
-    with engine.begin() as conn:
-        for stmt in schema:
-            conn.execute(text(stmt))
+    with app.app_context():
+        db.create_all()
 
-    print("✅ Database schema ensured at", url)
+        # Seed operations if none exist.  Operations define the available
+        # sequence codes that the ESP32 scanner can reference via operation_id.
+        if Operation.query.count() == 0:
+            ops = [
+                Operation(name="Load Sleeve - Jkt", sequence=5001),
+                Operation(name="Collar Attach", sequence=5005),
+                Operation(name="Front Press", sequence=5077),
+            ]
+            db.session.add_all(ops)
+            db.session.commit()
+
+        # Create workers if table is empty.  These workers come from the
+        # screenshots provided and will have token IDs that match the ESP32
+        # demo sketch.  After creation, QR codes are generated and the file
+        # paths stored.
+        if User.query.count() == 0:
+            workers = [
+                ("Rajesh Kumar", "5001", "SLEEVE"),
+                ("Priya Sharma", "5077", "BODY"),
+                ("Amit Singh", "5160", "COLLAR"),
+                ("Sunita Devi", "5313", "LINING"),
+                ("Ravi Patel", "5331", "ASSE-1"),
+            ]
+            for name, token, dept in workers:
+                u = User(name=name, token_id=token, department=dept)
+                db.session.add(u)
+            db.session.commit()
+            # Generate QR codes after persisting to get IDs.
+            for u in User.query.all():
+                path = make_worker_qr(
+                    os.path.join("static", "qrcodes"), u.token_id, f"worker_{u.id}.png"
+                )
+                u.qr_path = path
+            db.session.commit()
+
+        # Create sample bundles if none exist.  Each bundle has an order ID
+        # (e.g. the production order), a size range, colour and quantity.  A
+        # payload encoding these fields is placed into the QR code so that the
+        # ESP32 can decode them.
+        if Bundle.query.count() == 0:
+            bundles = [
+                ("650010011410", "036-050", "BLK3", 50),
+                ("650010011410", "036-050", "BLK4", 50),
+                ("650010011410", "036-050", "GREN", 44),
+            ]
+            for order_id, size, color, qty in bundles:
+                b = Bundle(order_id=order_id, size=size, color=color, qty=qty)
+                db.session.add(b)
+            db.session.commit()
+            # Generate QR codes after commit to capture IDs.
+            for b in Bundle.query.all():
+                payload = f"{b.id}|{b.order_id}|{b.size}|{b.color}"
+                path = make_bundle_qr(
+                    os.path.join("static", "qrcodes"), payload, f"bundle_{b.id}.png"
+                )
+                b.qr_path = path
+            db.session.commit()
+
+        print("Database initialised.")
 
 
 if __name__ == "__main__":

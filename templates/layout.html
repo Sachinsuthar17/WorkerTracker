@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Garment ERP</title>
+    <!-- Base stylesheet for dark mode and layout -->
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}?v={{ now.timestamp() }}"
+    />
+    <!-- Chart.js for future charts (optional) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body class="dark">
+    <aside class="sidebar">
+      <div class="brand">Garment ERP</div>
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('bundles') }}">Bundle Management</a>
+      <a href="{{ url_for('assign_task') }}">Workers &amp; Lines</a>
+      <a href="{{ url_for('users') }}">Users</a>
+      <a href="{{ url_for('reports') }}">Reports</a>
+    </aside>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

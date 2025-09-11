@@ -1,0 +1,155 @@
+/* Base styles for dark UI.  Colours and spacing follow the mockups.
+   The design uses a simple grid layout for cards and forms and avoids
+   specifying absolute widths so that the layout can adjust to various
+   screen sizes. */
+
+:root {
+  --bg: #0e1621;
+  --panel: #141e2a;
+  --text: #d7e1ec;
+  --muted: #9bb0c3;
+  --accent: #4cc9f0;
+  --good: #22c55e;
+  --bad: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body.dark {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial,
+    sans-serif;
+  line-height: 1.5;
+}
+
+/* Sidebar navigation */
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 220px;
+  background: var(--panel);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar .brand {
+  font-weight: 800;
+  margin-bottom: 12px;
+}
+
+.sidebar a {
+  color: var(--text);
+  text-decoration: none;
+  padding: 10px;
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.sidebar a:hover {
+  background: #1f2a37;
+}
+
+/* Main content area */
+.content {
+  margin-left: 240px;
+  padding: 24px;
+}
+
+h1,
+h2 {
+  margin: 8px 0 16px;
+}
+
+/* Card grid */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--panel);
+  padding: 16px;
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px #1f2a37 inset;
+}
+
+.card-title {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.card-value {
+  font-size: 28px;
+  font-weight: 800;
+}
+
+/* Tables */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid #1f2a37;
+}
+
+.table th {
+  color: var(--muted);
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Forms */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+input,
+select,
+button,
+.btn {
+  background: #0b1220;
+  color: var(--text);
+  border: 1px solid #1f2a37;
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 14px;
+}
+
+button,
+.btn {
+  cursor: pointer;
+  text-align: center;
+  display: inline-block;
+}
+
+button:hover,
+.btn:hover {
+  background: #1f2a37;
+}
+
+/* Images */
+img {
+  border-radius: 8px;
+}

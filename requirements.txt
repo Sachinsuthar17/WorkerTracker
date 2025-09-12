@@ -1,12 +1,21 @@
+# --- Flask stack (your versions kept, compatible with Py 3.11) ---
 Flask==2.3.3
 Flask-SQLAlchemy==3.0.5
 Flask-CORS==4.0.0
 Werkzeug==2.3.7
-pandas==2.1.1
-openpyxl==3.1.2
-qrcode==7.4.2
-segno==1.6.0
 gunicorn==21.2.0
 python-dotenv==1.0.0
+
+# --- DB drivers ---
 psycopg2-binary==2.9.7
+
+# --- Data + Excel (versions that have manylinux wheels for Py 3.11) ---
+numpy==1.26.4
+pandas==2.2.2
+openpyxl==3.1.2
+
+# --- Imaging / QR ---
 Pillow==10.0.1
+segno==1.6.0
+# qrcode is not needed if you're using segno exclusively; if you still want it:
+# qrcode==7.4.2

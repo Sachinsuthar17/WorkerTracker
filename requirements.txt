@@ -1,7 +1,6 @@
-Flask==3.0.3
-Flask-Cors==4.0.1
-gunicorn==22.0.0
-python-dotenv==1.0.1
-psycopg2-binary==2.9.10
+flask==2.3.3
+flask-cors==4.0.0
+segno==1.5.2
+gunicorn==21.2.0
 qrcode==7.4.2
-pillow==10.4.0
+pillow==10.0.0

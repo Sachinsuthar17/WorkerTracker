@@ -16,43 +16,50 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
-venv/
+# Flask
+instance/
+.webassets-cache
+
+# Environment variables
+.env
+.venv
 env/
+venv/
 ENV/
-.venv/
+env.bak/
+venv.bak/
 
 # Database
 *.db
+*.sqlite
 *.sqlite3
-production_data.db
-
-# Environment files
-.env
-.env.local
-.env.production
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
-.DS_Store
-Thumbs.db
+*~
 
 # Logs
 *.log
 
-# Flask
-instance/
-.webassets-cache
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Coverage
-htmlcov/
-.coverage
+# QR codes (but keep the directory)
+static/qrcodes/*.png
+static/qrcodes/*.jpg
+!static/qrcodes/.gitkeep

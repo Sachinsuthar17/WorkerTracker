@@ -1,25 +1,88 @@
-
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Garment ERP</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-<script defer src="https://kit.fontawesome.com/a2e0e6ad54.js" crossorigin="anonymous"></script>
-<script defer src="{{ url_for('static', filename='app.js') }}"></script></head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ brand }}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
 <body>
-<div class="layout">
-  <aside class="sidebar">
-    <div class="sidebar__logo"><span class="sidebar__title">Garment ERP</span></div>
-    <ul class="menu">
-      <li class="menu-item" data-section="dashboard"><a class="menu-link" href="{{ url_for('dashboard') }}"><i class="fas fa-chart-line"></i> Dashboard</a></li>
-      <li class="menu-item" data-section="ob"><a class="menu-link" href="{{ url_for('ob_management') }}"><i class="fas fa-file-excel"></i> OB Management</a></li>
-      <li class="menu-item" data-section="orders"><a class="menu-link" href="{{ url_for('production_orders') }}"><i class="fas fa-box-open"></i> Production Orders</a></li>
-      <li class="menu-item" data-section="bundles"><a class="menu-link" href="{{ url_for('bundle_management') }}"><i class="fas fa-qrcode"></i> Bundle Management</a></li>
-      <li class="menu-item" data-section="workers"><a class="menu-link" href="{{ url_for('workers_lines') }}"><i class="fas fa-users"></i> Workers & Lines</a></li>
-      <li class="menu-item" data-section="live"><a class="menu-link" href="{{ url_for('live_scanning') }}"><i class="fas fa-broadcast-tower"></i> Live Scanning</a></li>
-      <li class="menu-item" data-section="reports"><a class="menu-link" href="{{ url_for('reports') }}"><i class="fas fa-chart-pie"></i> Reports</a></li>
-      <li class="menu-item" data-section="settings"><a class="menu-link" href="{{ url_for('settings') }}"><i class="fas fa-cog"></i> Settings</a></li>
-    </ul>
-  </aside>
-  <main class="main">
-    {% block content %}{% endblock %}
-  </main>
-</div>
-</body></html>
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-menu-toggle" id="mobileMenuToggle">
+        <i class="fas fa-bars"></i>
+    </button>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <i class="fas fa-industry"></i>
+                <span>{{ brand }}</span>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-menu">
+                <li class="menu-item active" data-section="dashboard">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="menu-item" data-section="workers">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-users"></i>
+                        <span>Workers</span>
+                    </a>
+                </li>
+                <li class="menu-item" data-section="operations">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-cogs"></i>
+                        <span>Operations</span>
+                    </a>
+                </li>
+                <li class="menu-item" data-section="production">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Production</span>
+                    </a>
+                </li>
+                <li class="menu-item" data-section="reports">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-chart-bar"></i>
+                        <span>Reports</span>
+                    </a>
+                </li>
+                <li class="menu-item" data-section="settings">
+                    <a href="#" class="menu-link">
+                        <i class="fas fa-cog"></i>
+                        <span>Settings</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="alert alert--{{ 'success' if category == 'success' else 'error' }}">
+                            {{ message }}
+                            <button class="alert__close">&times;</button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

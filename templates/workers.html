@@ -1,40 +1,16 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>PMS • Workers</title>
-<link rel="stylesheet" href="style.css"/>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-</head>
-<body>
-<div class="wrapper">
-  
-    <aside class="sidebar">
-      <div class="brand">PMS</div>
-      <nav><a class="" href="dashboard.html"><span>📊</span><span>Dashboard</span></a><a class="active" href="workers.html"><span>👷</span><span>Workers</span></a><a class="" href="operations.html"><span>⚙️</span><span>Operations</span></a><a class="" href="bundles.html"><span>📦</span><span>Bundles</span></a><a class="" href="production.html"><span>🧾</span><span>Production Order</span></a><a class="" href="upload.html"><span>📂</span><span>File Upload</span></a><a class="" href="scanner.html"><span>🧪</span><span>ESP32 Scanner</span></a><a class="" href="reports.html"><span>📑</span><span>Reports</span></a></nav>
-    </aside>
-    
-  <main class="content">
-    
-<div class="hd"><h2>Worker Management</h2></div>
-<div class="card">
-  <table class="table">
-    <thead><tr><th>Name</th><th>Token ID</th><th>Department</th><th>Line</th><th>Status</th><th>QR Code</th><th>Actions</th></tr></thead>
-    <tbody>
-<tr><td>Rajesh Kumar</td><td>RK001</td><td>SLEEVE</td><td>Line-1</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Priya Sharma</td><td>PS002</td><td>COLLAR</td><td>Line-1</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Amit Singh</td><td>AS003</td><td>LINING</td><td>Line-2</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Sunita Devi</td><td>SD004</td><td>BODY</td><td>Line-2</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Vikram Yadav</td><td>VY005</td><td>ASSE-1</td><td>Line-3</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Kavita Patel</td><td>KP006</td><td>ASSE-2</td><td>Line-3</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Ravi Gupta</td><td>RG007</td><td>FLAP</td><td>Line-4</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-<tr><td>Meera Joshi</td><td>MJ008</td><td>BACK</td><td>Line-4</td><td><span class="badge success">ACTIVE</span></td><td>🔗 QR</td><td><button class="btn">Edit</button></td></tr>
-</tbody>
-  </table>
-</div>
+{% extends "layout.html" %}
 
-  </main>
-</div>
-<script src="app.js"></script>
+{% block title %}Workers - PMS{% endblock %}
+{% block page_title %}Workers{% endblock %}
 
-</body></html>
+{% block content %}
+<div class="workers-section">
+    <div class="section-header">Workers Management</div>
+    <div class="workers-list">
+        <!-- Workers content -->
+        <p style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+            Workers management interface - upload your Excel file to see operations data
+        </p>
+    </div>
+</div>
+{% endblock %}

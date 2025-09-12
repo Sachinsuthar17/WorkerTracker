@@ -1,0 +1,87 @@
+{% extends "layout.html" %}
+
+{% block title %}File Upload - PMS{% endblock %}
+{% block page_title %}File Upload{% endblock %}
+
+{% block content %}
+<div class="upload-layout">
+    <!-- Upload OB File -->
+    <div class="upload-section">
+        <div class="section-header">Upload OB File (Excel)</div>
+        <form method="POST" action="{{ url_for('upload_ob_file') }}" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('ob_file').click()">
+                <div class="upload-icon">
+                    <i class="fas fa-file-excel"></i>
+                </div>
+                <div class="upload-text">Drop Excel file here or click to browse</div>
+                <input type="file" id="ob_file" name="ob_file" accept=".xlsx,.xls" style="display: none;" onchange="updateFileName(this, 'ob-filename')">
+                <div id="ob-filename" class="filename"></div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin: 1rem 1.5rem;">
+                <i class="fas fa-upload"></i> Upload OB File
+            </button>
+        </form>
+    </div>
+
+    <!-- Upload Production Order -->
+    <div class="upload-section">
+        <div class="section-header">Upload Production Order</div>
+        <form method="POST" action="{{ url_for('upload_production_order') }}" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('production_file').click()">
+                <div class="upload-icon">
+                    <i class="fas fa-file-pdf"></i>
+                </div>
+                <div class="upload-text">Drop PDF file here or click to browse</div>
+                <input type="file" id="production_file" name="production_file" accept=".pdf,.xlsx,.xls" style="display: none;" onchange="updateFileName(this, 'prod-filename')">
+                <div id="prod-filename" class="filename"></div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin: 1rem 1.5rem;">
+                <i class="fas fa-upload"></i> Upload Production Order
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateFileName(input, targetId) {
+    const target = document.getElementById(targetId);
+    if (input.files.length > 0) {
+        target.textContent = `Selected: ${input.files[0].name}`;
+        target.style.color = '#00bcd4';
+    }
+}
+
+// Drag and drop functionality
+document.querySelectorAll('.upload-area').forEach(area => {
+    area.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        area.style.borderColor = '#00bcd4';
+        area.style.background = 'rgba(0, 188, 212, 0.1)';
+    });
+
+    area.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        area.style.borderColor = '#2d3748';
+        area.style.background = 'transparent';
+    });
+
+    area.addEventListener('drop', (e) => {
+        e.preventDefault();
+        area.style.borderColor = '#2d3748';
+        area.style.background = 'transparent';
+
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            const fileInput = area.querySelector('input[type="file"]');
+            fileInput.files = files;
+
+            const filenameDiv = area.querySelector('.filename');
+            filenameDiv.textContent = `Selected: ${files[0].name}`;
+            filenameDiv.style.color = '#00bcd4';
+        }
+    });
+});
+</script>
+{% endblock %}

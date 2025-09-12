@@ -1,34 +1,71 @@
-
-<!-- Optional base template if your server uses templating (e.g., Jinja/Django). -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{% block title %}PMS{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') if url_for else 'style.css' }}">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PMS - Production Management System{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-<div class="wrapper">
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="brand">PMS</div>
-    <nav>
-      <a href="/dashboard" class="{% if active=='dashboard' %}active{% endif %}"><span>📊</span><span>Dashboard</span></a>
-      <a href="/workers" class="{% if active=='workers' %}active{% endif %}"><span>👷</span><span>Workers</span></a>
-      <a href="/operations" class="{% if active=='operations' %}active{% endif %}"><span>⚙️</span><span>Operations</span></a>
-      <a href="/bundles" class="{% if active=='bundles' %}active{% endif %}"><span>📦</span><span>Bundles</span></a>
-      <a href="/production" class="{% if active=='production' %}active{% endif %}"><span>🧾</span><span>Production Order</span></a>
-      <a href="/upload" class="{% if active=='upload' %}active{% endif %}"><span>📂</span><span>File Upload</span></a>
-      <a href="/scanner" class="{% if active=='scanner' %}active{% endif %}"><span>🧪</span><span>ESP32 Scanner</span></a>
-      <a href="/reports" class="{% if active=='reports' %}active{% endif %}"><span>📑</span><span>Reports</span></a>
-    </nav>
-  </aside>
-  <!-- Content -->
-  <main class="content">
-    {% block content %}{% endblock %}
-  </main>
-</div>
-<script src="{{ url_for('static', filename='app.js') if url_for else 'app.js' }}"></script>
-{% block scripts %}{% endblock %}
-</body></html>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <a href="{{ url_for('dashboard') }}" class="brand">PMS</a>
+            </div>
+            <div class="nav-menu">
+                <a href="{{ url_for('dashboard') }}" class="nav-item {{ 'active' if request.endpoint == 'dashboard' else '' }}">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                </a>
+                <a href="{{ url_for('workers') }}" class="nav-item {{ 'active' if request.endpoint == 'workers' else '' }}">
+                    <i class="fas fa-users"></i> Workers
+                </a>
+                <a href="{{ url_for('operations') }}" class="nav-item {{ 'active' if request.endpoint == 'operations' else '' }}">
+                    <i class="fas fa-cogs"></i> Operations
+                </a>
+                <a href="{{ url_for('bundles') }}" class="nav-item {{ 'active' if request.endpoint == 'bundles' else '' }}">
+                    <i class="fas fa-boxes"></i> Bundles
+                </a>
+                <a href="{{ url_for('production') }}" class="nav-item {{ 'active' if request.endpoint == 'production' else '' }}">
+                    <i class="fas fa-clipboard-list"></i> Production Order
+                </a>
+                <a href="{{ url_for('file_upload') }}" class="nav-item {{ 'active' if request.endpoint == 'file_upload' else '' }}">
+                    <i class="fas fa-upload"></i> File Upload
+                </a>
+                <a href="{{ url_for('esp32_scanner') }}" class="nav-item {{ 'active' if request.endpoint == 'esp32_scanner' else '' }}">
+                    <i class="fas fa-qrcode"></i> ESP32 Scanner
+                </a>
+                <a href="{{ url_for('reports') }}" class="nav-item {{ 'active' if request.endpoint == 'reports' else '' }}">
+                    <i class="fas fa-chart-bar"></i> Reports
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="top-bar">
+                <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+                <div class="page-actions">
+                    {% block page_actions %}{% endblock %}
+                </div>
+            </div>
+
+            <div class="content">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,52 +1,85 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>PMS • Reports</title>
-<link rel="stylesheet" href="style.css"/>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-</head>
-<body>
-<div class="wrapper">
-  
-    <aside class="sidebar">
-      <div class="brand">PMS</div>
-      <nav><a class="" href="dashboard.html"><span>📊</span><span>Dashboard</span></a><a class="" href="workers.html"><span>👷</span><span>Workers</span></a><a class="" href="operations.html"><span>⚙️</span><span>Operations</span></a><a class="" href="bundles.html"><span>📦</span><span>Bundles</span></a><a class="" href="production.html"><span>🧾</span><span>Production Order</span></a><a class="" href="upload.html"><span>📂</span><span>File Upload</span></a><a class="" href="scanner.html"><span>🧪</span><span>ESP32 Scanner</span></a><a class="active" href="reports.html"><span>📑</span><span>Reports</span></a></nav>
-    </aside>
-    
-  <main class="content">
-    
-<div class="hd"><h2>Reports & Analytics</h2><button class="btn">📄 Export Report</button></div>
-<div class="grid cols-2">
-  <div class="card">
-    <h5>Worker Productivity</h5>
-    <div style="height:420px"><canvas id="workerChart"></canvas></div>
-  </div>
-  <div class="card">
-    <h5>Earnings Summary</h5>
-    <div class="list" style="margin-top:8px">
-      <div class="item"><span>Rajesh Kumar</span><span>₹19.53</span></div>
-      <div class="item"><span>Priya Sharma</span><span>₹31.62</span></div>
-      <div class="item"><span>Amit Singh</span><span>₹61.38</span></div>
-      <div class="item"><span>Sunita Devi</span><span>₹50.22</span></div>
-      <div class="item"><span>Vikram Yadav</span><span>₹35.34</span></div>
-      <div class="item"><span>Kavita Patel</span><span>₹15.75</span></div>
-      <div class="item"><span>Ravi Gupta</span><span>₹9.88</span></div>
-      <div class="item"><span>Meera Joshi</span><span>₹20.90</span></div>
+{% extends "layout.html" %}
+
+{% block title %}Reports & Analytics - PMS{% endblock %}
+{% block page_title %}Reports & Analytics{% endblock %}
+{% block page_actions %}
+<button class="export-btn">
+    <i class="fas fa-download"></i> Export Report
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="reports-layout">
+    <!-- Worker Productivity Chart -->
+    <div class="chart-section">
+        <div class="section-header">Worker Productivity</div>
+        <div class="chart-container">
+            <div class="chart-bars">
+                <div class="chart-bar" style="height: 85%;">
+                    <div class="bar-label">Rajesh</div>
+                </div>
+                <div class="chart-bar" style="height: 92%;">
+                    <div class="bar-label">Priya</div>
+                </div>
+                <div class="chart-bar" style="height: 88%;">
+                    <div class="bar-label">Amit</div>
+                </div>
+                <div class="chart-bar" style="height: 95%;">
+                    <div class="bar-label">Sunita</div>
+                </div>
+                <div class="chart-bar" style="height: 90%;">
+                    <div class="bar-label">Vikram</div>
+                </div>
+                <div class="chart-bar" style="height: 75%;">
+                    <div class="bar-label">Kavita</div>
+                </div>
+                <div class="chart-bar" style="height: 70%;">
+                    <div class="bar-label">Ravi</div>
+                </div>
+                <div class="chart-bar" style="height: 78%;">
+                    <div class="bar-label">Meera</div>
+                </div>
+            </div>
+        </div>
     </div>
-  </div>
+
+    <!-- Earnings Summary -->
+    <div class="earnings-section">
+        <div class="section-header">Earnings Summary</div>
+        <div class="earnings-list">
+            <div class="earnings-item">
+                <div class="earnings-name">Rajesh Kumar</div>
+                <div class="earnings-amount">₹19.53</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Priya Sharma</div>
+                <div class="earnings-amount">₹31.62</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Amit Singh</div>
+                <div class="earnings-amount">₹61.38</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Sunita Devi</div>
+                <div class="earnings-amount">₹50.22</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Vikram Yadav</div>
+                <div class="earnings-amount">₹35.34</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Kavita Patel</div>
+                <div class="earnings-amount">₹16.75</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Ravi Gupta</div>
+                <div class="earnings-amount">₹9.88</div>
+            </div>
+            <div class="earnings-item">
+                <div class="earnings-name">Meera Joshi</div>
+                <div class="earnings-amount">₹20.90</div>
+            </div>
+        </div>
+    </div>
 </div>
-
-  </main>
-</div>
-<script src="app.js"></script>
-
-<script>
-barChart('workerChart',
- ['Rajesh','Priya','Amit','Sunita','Vikram','Kavita','Ravi','Meera'],
- [100,100,100,100,95,50,40,60],
- {scales:{y:{beginAtZero:true, max:100}}}
-);
-</script>
-
-</body></html>
+{% endblock %}

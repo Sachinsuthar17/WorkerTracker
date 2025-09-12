@@ -6,13 +6,13 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, f
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from sqlalchemy import func
+from sqlalchemy import func, case
 import segno
 
 # ----------------------
 # App Configuration
 # ----------------------
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # Secret key for sessions/flash
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'production-secret-key-2024')
@@ -31,7 +31,7 @@ CORS(app)
 
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs('static/qrcodes', exist_ok=True)
+os.makedirs(os.path.join(app.static_folder, 'qrcodes'), exist_ok=True)
 
 # ----------------------
 # Database Models
@@ -118,10 +118,23 @@ class WorkerLog(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 # ----------------------
-# Utility Functions
+# Jinja helpers
+# ----------------------
+@app.template_filter('inr')
+def inr(value):
+    try:
+        return f"₹{float(value):.2f}"
+    except Exception:
+        return "₹0.00"
+
+@app.context_processor
+def inject_now():
+    return {"now": datetime.utcnow()}
+
+# ----------------------
+# Parsers (unchanged)
 # ----------------------
 def parse_ob_file(file_path):
-    """Parse OB Excel file into operations"""
     try:
         df = pd.read_excel(file_path)
         operations_data = []
@@ -143,11 +156,10 @@ def parse_ob_file(file_path):
         return []
 
 def parse_production_order_file(file_path):
-    """Parse production order Excel/CSV"""
     try:
         try:
             df = pd.read_excel(file_path)
-        except:
+        except Exception:
             df = pd.read_csv(file_path)
         orders = []
         for _, row in df.iterrows():
@@ -166,7 +178,6 @@ def parse_production_order_file(file_path):
         return []
 
 def generate_bundles(production_order_id, total_quantity):
-    """Generate 12 bundles evenly split"""
     bundles = []
     bundle_qty = math.ceil(total_quantity / 12)
     order = ProductionOrder.query.get(production_order_id)
@@ -190,16 +201,31 @@ def generate_bundles(production_order_id, total_quantity):
     return bundles
 
 def generate_worker_qr_code(worker_id):
-    """Generate worker QR code image"""
     worker = Worker.query.get(worker_id)
     if not worker:
         return None
     qr_data = f"W:{worker.token_id}"
     qr = segno.make(qr_data)
     filename = f"worker_{worker_id}.png"
-    filepath = os.path.join('static/qrcodes', filename)
+    filepath = os.path.join(app.static_folder, 'qrcodes', filename)
     qr.save(filepath, scale=8)
     return filename
+
+# ----------------------
+# Data helpers used by UI
+# ----------------------
+def bundle_progress_map():
+    """returns dict {bundle_id: {'completed': int, 'earnings': float}}"""
+    rows = (
+        db.session.query(
+            WorkerBundle.bundle_id,
+            func.coalesce(func.sum(WorkerBundle.pieces_completed), 0).label("completed"),
+            func.coalesce(func.sum(WorkerBundle.earnings), 0.0).label("earnings"),
+        )
+        .group_by(WorkerBundle.bundle_id)
+        .all()
+    )
+    return {r.bundle_id: {"completed": int(r.completed or 0), "earnings": float(r.earnings or 0)} for r in rows}
 
 # ----------------------
 # Routes
@@ -208,47 +234,123 @@ def generate_worker_qr_code(worker_id):
 def dashboard():
     total_workers = Worker.query.filter_by(status='active').count()
     total_bundles = Bundle.query.count()
-    pending_bundles = Bundle.query.filter_by(status='pending').count()
-    completed_bundles = Bundle.query.filter_by(status='completed').count()
-    recent_logs = db.session.query(WorkerLog, Worker.name).join(Worker).order_by(WorkerLog.timestamp.desc()).limit(10).all()
-    return render_template('dashboard.html',
-                           total_workers=total_workers,
-                           total_bundles=total_bundles,
-                           pending_bundles=pending_bundles,
-                           completed_bundles=completed_bundles,
-                           recent_logs=recent_logs)
+    operations_count = Operation.query.count()
+
+    # Totals
+    total_earnings = db.session.query(func.coalesce(func.sum(WorkerBundle.earnings), 0.0)).scalar() or 0.0
+
+    # Department workload (counts of operations per department)
+    dept_rows = (
+        db.session.query(Operation.department, func.count(Operation.id))
+        .group_by(Operation.department)
+        .all()
+    )
+    dept_labels = [d[0] or "—" for d in dept_rows]
+    dept_counts = [int(d[1]) for d in dept_rows]
+
+    # Recent logs
+    recent_logs = (
+        db.session.query(WorkerLog, Worker.name)
+        .join(Worker)
+        .order_by(WorkerLog.timestamp.desc())
+        .limit(4)
+        .all()
+    )
+
+    # Bundle status buckets for donut
+    status_rows = (
+        db.session.query(Bundle.status, func.count(Bundle.id))
+        .group_by(Bundle.status)
+        .all()
+    )
+    donut = {k or "pending": int(v) for k, v in status_rows}
+
+    return render_template(
+        'dashboard.html',
+        active='dashboard',
+        total_workers=total_workers,
+        total_bundles=total_bundles,
+        operations_count=operations_count,
+        total_earnings=total_earnings,
+        dept_labels=dept_labels,
+        dept_counts=dept_counts,
+        donut=donut,
+        recent_logs=recent_logs,
+    )
 
 @app.route('/workers')
 def workers():
     workers = Worker.query.order_by(Worker.created_at.desc()).all()
-    return render_template('workers.html', workers=workers)
+    return render_template('workers.html', active='workers', workers=workers)
 
 @app.route('/production')
 def production():
     orders = ProductionOrder.query.order_by(ProductionOrder.created_at.desc()).all()
-    ob_files = OBFile.query.order_by(OBFile.upload_date.desc()).all()
-    return render_template('production.html', production_orders=orders, ob_files=ob_files)
+    return render_template('production.html', active='production', orders=orders)
 
 @app.route('/operations')
 def operations():
     operations = Operation.query.order_by(Operation.op_no).all()
-    return render_template('operations.html', operations=operations)
+    return render_template('operations.html', active='operations', operations=operations)
 
 @app.route('/bundles')
 def bundles():
-    bundles = db.session.query(Bundle, ProductionOrder.style_number).join(ProductionOrder).order_by(Bundle.created_at.desc()).all()
-    workers = Worker.query.filter_by(status='active').all()
-    return render_template('bundles.html', bundles=bundles, workers=workers)
+    # Join to order to show style number, and compute progress/earnings
+    bundle_rows = (
+        db.session.query(Bundle, ProductionOrder.style_number)
+        .join(ProductionOrder, Bundle.production_order_id == ProductionOrder.id)
+        .order_by(Bundle.created_at.desc())
+        .all()
+    )
+    prog_map = bundle_progress_map()
+    # Decorate rows for the template
+    view = []
+    for b, style in bundle_rows:
+        comp = prog_map.get(b.id, {"completed": 0, "earnings": 0.0})
+        completed = comp["completed"]
+        pct = 0
+        if b.qty_per_bundle and b.qty_per_bundle > 0:
+            pct = min(100, int(round(100 * completed / b.qty_per_bundle)))
+        view.append({
+            "id": b.id,
+            "bundle_no": b.bundle_no,
+            "status": b.status,
+            "color": b.color or "-",
+            "qty": b.qty_per_bundle,
+            "line": b.assigned_line or "-",
+            "completed_str": f"{completed}/{b.qty_per_bundle}",
+            "pct": pct,
+            "earnings": comp["earnings"],
+            "style": style or "",
+        })
+    return render_template('bundles.html', active='bundles', bundles=view)
 
 @app.route('/reports')
 def reports():
-    stats = db.session.query(
-        Worker.name,
-        Worker.department,
-        func.sum(WorkerBundle.pieces_completed).label('total_pieces'),
-        func.sum(WorkerBundle.earnings).label('total_earnings')
-    ).join(WorkerBundle).group_by(Worker.id).all()
-    return render_template('reports.html', worker_stats=stats)
+    stats = (
+        db.session.query(
+            Worker.name.label('name'),
+            func.coalesce(func.sum(WorkerBundle.pieces_completed), 0).label('total_pieces'),
+            func.coalesce(func.sum(WorkerBundle.earnings), 0.0).label('total_earnings'),
+        )
+        .join(WorkerBundle, Worker.id == WorkerBundle.worker_id)
+        .group_by(Worker.id)
+        .order_by(Worker.name.asc())
+        .all()
+    )
+
+    # Bar chart labels and values (completion % approximated out of 100)
+    labels = [s.name for s in stats]
+    # If you have a max target per worker, replace 100 with that target.
+    bars = [min(100, int(round((s.total_pieces or 0)))) for s in stats]
+
+    return render_template(
+        'reports.html',
+        active='reports',
+        worker_stats=stats,
+        labels=labels,
+        bars=bars
+    )
 
 # ----------------------
 # Init DB

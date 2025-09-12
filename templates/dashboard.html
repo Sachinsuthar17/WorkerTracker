@@ -1,153 +1,72 @@
-{% extends "layout.html" %}
-
-{% block content %}
-<div class="page-header">
-    <h1><i class="fas fa-tachometer-alt"></i> Production Dashboard</h1>
-    <div class="live-indicator">
-        <div class="pulse-dot"></div>
-        <span>Live</span>
-    </div>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PMS • Dashboard</title>
+<link rel="stylesheet" href="style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrapper">
+  
+    <aside class="sidebar">
+      <div class="brand">PMS</div>
+      <nav><a class="active" href="dashboard.html"><span>📊</span><span>Dashboard</span></a><a class="" href="workers.html"><span>👷</span><span>Workers</span></a><a class="" href="operations.html"><span>⚙️</span><span>Operations</span></a><a class="" href="bundles.html"><span>📦</span><span>Bundles</span></a><a class="" href="production.html"><span>🧾</span><span>Production Order</span></a><a class="" href="upload.html"><span>📂</span><span>File Upload</span></a><a class="" href="scanner.html"><span>🧪</span><span>ESP32 Scanner</span></a><a class="" href="reports.html"><span>📑</span><span>Reports</span></a></nav>
+    </aside>
+    
+  <main class="content">
+    
+<div class="hd">
+  <h2>Production Dashboard</h2>
+  <button class="btn">🔄 Refresh</button>
+  <span class="badge">Last updated: 3:37:52 PM</span>
 </div>
 
-<!-- Statistics Cards -->
-<div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-icon">
-            <i class="fas fa-users"></i>
-        </div>
-        <div class="stat-content">
-            <div class="stat-value" id="totalWorkers">{{ total_workers }}</div>
-            <div class="stat-label">Active Workers</div>
-        </div>
-    </div>
-
-    <div class="stat-card">
-        <div class="stat-icon">
-            <i class="fas fa-boxes"></i>
-        </div>
-        <div class="stat-content">
-            <div class="stat-value" id="totalBundles">{{ total_bundles }}</div>
-            <div class="stat-label">Total Bundles</div>
-        </div>
-    </div>
-
-    <div class="stat-card">
-        <div class="stat-icon">
-            <i class="fas fa-clock"></i>
-        </div>
-        <div class="stat-content">
-            <div class="stat-value" id="pendingBundles">{{ pending_bundles }}</div>
-            <div class="stat-label">Pending Bundles</div>
-        </div>
-    </div>
-
-    <div class="stat-card">
-        <div class="stat-icon">
-            <i class="fas fa-check-circle"></i>
-        </div>
-        <div class="stat-content">
-            <div class="stat-value" id="completedBundles">{{ completed_bundles }}</div>
-            <div class="stat-label">Completed Bundles</div>
-        </div>
-    </div>
+<div class="grid cols-4">
+  <div class="card stat"><div><div class="label">Active Workers</div><div class="value">8</div></div></div>
+  <div class="card stat"><div><div class="label">Total Bundles</div><div class="value">12</div></div></div>
+  <div class="card stat"><div><div class="label">Operations</div><div class="value">13</div></div></div>
+  <div class="card stat"><div><div class="label">Total Earnings</div><div class="value">₹244.62</div></div></div>
 </div>
 
-<!-- Dashboard Content -->
-<div class="dashboard-grid">
-    <!-- Recent Activities -->
-    <div class="dashboard-card">
-        <div class="card-header">
-            <h3><i class="fas fa-history"></i> Recent Activities</h3>
-        </div>
-        <div class="card-body">
-            <div class="activities-list" id="recentActivities">
-                {% for log, worker_name in recent_logs %}
-                <div class="activity-item">
-                    <div class="activity-icon">
-                        <i class="fas fa-{{ 'sign-in-alt' if log.action_type == 'login' else 'sign-out-alt' if log.action_type == 'logout' else 'qrcode' }}"></i>
-                    </div>
-                    <div class="activity-content">
-                        <div class="activity-title">{{ worker_name }}</div>
-                        <div class="activity-desc">{{ log.action_type.title() }}</div>
-                        <div class="activity-time">{{ log.timestamp.strftime('%H:%M') }}</div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
+<div class="grid cols-2" style="margin-top:16px">
+  <div class="card">
+    <h5>Bundle Status Distribution</h5>
+    <div style="height:360px"><canvas id="bundleChart"></canvas></div>
+    <div style="display:flex;gap:12px;margin-top:10px;color:#b9c6cf">
+      <span class="badge progress">ASSIGNED</span>
+      <span class="badge accent">IN PROGRESS</span>
+      <span class="badge pending">PENDING</span>
+      <span class="badge success">COMPLETED</span>
     </div>
-
-    <!-- Bundle Status Overview -->
-    <div class="dashboard-card">
-        <div class="card-header">
-            <h3><i class="fas fa-chart-pie"></i> Bundle Status</h3>
-        </div>
-        <div class="card-body">
-            <div class="progress-overview">
-                <div class="progress-item">
-                    <div class="progress-label">Pending</div>
-                    <div class="progress-bar">
-                        <div class="progress-fill progress-pending" style="width: {{ (pending_bundles / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
-                    </div>
-                    <div class="progress-value">{{ pending_bundles }}</div>
-                </div>
-                <div class="progress-item">
-                    <div class="progress-label">In Progress</div>
-                    <div class="progress-bar">
-                        <div class="progress-fill progress-active" style="width: {{ ((total_bundles - pending_bundles - completed_bundles) / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
-                    </div>
-                    <div class="progress-value">{{ total_bundles - pending_bundles - completed_bundles }}</div>
-                </div>
-                <div class="progress-item">
-                    <div class="progress-label">Completed</div>
-                    <div class="progress-bar">
-                        <div class="progress-fill progress-completed" style="width: {{ (completed_bundles / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
-                    </div>
-                    <div class="progress-value">{{ completed_bundles }}</div>
-                </div>
-            </div>
-        </div>
-    </div>
+  </div>
+  <div class="card">
+    <h5>Department Workload</h5>
+    <div style="height:360px"><canvas id="deptChart"></canvas></div>
+  </div>
 </div>
 
-<!-- Additional Stats -->
-<div class="additional-stats">
-    <div class="stat-row">
-        <div class="stat-item">
-            <i class="fas fa-cut"></i>
-            <span class="stat-name">Total Pieces</span>
-            <span class="stat-number" id="totalPieces">-</span>
-        </div>
-        <div class="stat-item">
-            <i class="fas fa-rupee-sign"></i>
-            <span class="stat-name">Total Earnings</span>
-            <span class="stat-number" id="totalEarnings">-</span>
-        </div>
-    </div>
+<div class="card" style="margin-top:18px">
+  <h5>Recent Activity</h5>
+  <div class="list" style="margin-top:10px">
+    <div class="item"><span>Rajesh Kumar completed 15 pieces in Bundle B01</span><span class="tiny">2 minutes ago</span></div>
+    <div class="item"><span>Bundle B05 marked as completed</span><span class="tiny">5 minutes ago</span></div>
+    <div class="item"><span>New operation assigned to Line-2</span><span class="tiny">8 minutes ago</span></div>
+    <div class="item"><span>Earnings updated for 3 workers</span><span class="tiny">12 minutes ago</span></div>
+  </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
+  </main>
+</div>
+<script src="app.js"></script>
+
 <script>
-// Auto-refresh dashboard data
-function refreshDashboardStats() {
-    fetch('/api/dashboard_stats')
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('totalWorkers').textContent = data.total_workers;
-            document.getElementById('totalBundles').textContent = data.total_bundles;
-            document.getElementById('pendingBundles').textContent = data.pending_bundles;
-            document.getElementById('completedBundles').textContent = data.completed_bundles;
-            document.getElementById('totalPieces').textContent = data.total_pieces;
-            document.getElementById('totalEarnings').textContent = '₹' + data.total_earnings;
-        })
-        .catch(error => console.error('Error fetching dashboard stats:', error));
-}
-
-// Refresh every 30 seconds
-setInterval(refreshDashboardStats, 30000);
-
-// Initial load
-refreshDashboardStats();
+doughnutChart('bundleChart',['Assigned','In Progress','Pending','Completed'],[3,3,3,3]);
+barChart('deptChart',
+  ['SLEEVE','COLLAR','LINING','FLAP','BACK','BODY','ASSE-1','ASSE-2','POST ASSEMBLY'],
+  [4,2,1,1,1,1,1,1,1],
+  {scales:{y:{beginAtZero:true, max:4}}}
+);
 </script>
-{% endblock %}
+
+</body></html>

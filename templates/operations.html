@@ -1,73 +1,43 @@
-{% extends "layout.html" %}
-
-{% block content %}
-<div class="page-header">
-    <h1><i class="fas fa-cogs"></i> Operations Management</h1>
-</div>
-
-<!-- Operations List -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PMS • Operations</title>
+<link rel="stylesheet" href="style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrapper">
+  
+    <aside class="sidebar">
+      <div class="brand">PMS</div>
+      <nav><a class="" href="dashboard.html"><span>📊</span><span>Dashboard</span></a><a class="" href="workers.html"><span>👷</span><span>Workers</span></a><a class="active" href="operations.html"><span>⚙️</span><span>Operations</span></a><a class="" href="bundles.html"><span>📦</span><span>Bundles</span></a><a class="" href="production.html"><span>🧾</span><span>Production Order</span></a><a class="" href="upload.html"><span>📂</span><span>File Upload</span></a><a class="" href="scanner.html"><span>🧪</span><span>ESP32 Scanner</span></a><a class="" href="reports.html"><span>📑</span><span>Reports</span></a></nav>
+    </aside>
+    
+  <main class="content">
+    
+<div class="hd"><h2>Operations Management</h2></div>
 <div class="card">
-    <div class="card-header">
-        <h3><i class="fas fa-list"></i> All Operations</h3>
-        <div class="card-actions">
-            <input type="text" class="search-input" id="searchOperations" placeholder="Search operations...">
-        </div>
-    </div>
-    <div class="card-body">
-        {% if operations %}
-        <div class="table-responsive">
-            <table class="data-table" id="operationsTable">
-                <thead>
-                    <tr>
-                        <th>Op No</th>
-                        <th>Operation Name</th>
-                        <th>Machine</th>
-                        <th>Department</th>
-                        <th>Std Min</th>
-                        <th>Piece Rate (₹)</th>
-                        <th>Skill Level</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for operation in operations %}
-                    <tr>
-                        <td><strong>{{ operation.op_no }}</strong></td>
-                        <td>{{ operation.name }}</td>
-                        <td>{{ operation.machine or '-' }}</td>
-                        <td>{{ operation.department or operation.sub_section or '-' }}</td>
-                        <td>{{ "%.2f"|format(operation.std_min) }}</td>
-                        <td class="text-success">{{ "%.2f"|format(operation.piece_rate) }}</td>
-                        <td>{{ operation.skill_level or 'Medium' }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="empty-state">
-            <i class="fas fa-cogs"></i>
-            <h4>No Operations Found</h4>
-            <p>Upload an OB file to see operations data.</p>
-        </div>
-        {% endif %}
-    </div>
+  <table class="table">
+    <thead><tr><th>Seq No</th><th>Op No</th><th>Description</th><th>Machine</th><th>Department</th><th>Std Min</th><th>Piece Rate (₹)</th></tr></thead>
+    <tbody><tr><td>1</td><td>5001</td><td>Loading Sleeve - Jkt</td><td>TABLE</td><td>SLEEVE</td><td>0.28</td><td>₹0.21</td></tr>
+<tr><td>2</td><td>599</td><td>Attach Fusing to Sleeve bottom By Snls x2</td><td>SNLS</td><td>SLEEVE</td><td>0.45</td><td>₹0.34</td></tr>
+<tr><td>3</td><td>5811</td><td>Press Sleeve Cuff Fold & Vent Crease Top Panel x2 Jkt</td><td>IRONING TABLE</td><td>SLEEVE</td><td>0.88</td><td>₹0.66</td></tr>
+<tr><td>4</td><td>5005</td><td>Join Sleeve Outseam - Sncs x2 Jkt</td><td>SNLS</td><td>SLEEVE</td><td>0.72</td><td>₹0.54</td></tr>
+<tr><td>17</td><td>5191</td><td>marking collar pick - jkt</td><td>TABLE</td><td>COLLAR</td><td>0.15</td><td>₹0.11</td></tr>
+<tr><td>18</td><td>5192</td><td>Runstitch Collar- Jkt</td><td>SNLS</td><td>COLLAR</td><td>0.47</td><td>₹0.35</td></tr>
+<tr><td>27</td><td>5021</td><td>Loading Lining- Jkt</td><td>TABLE</td><td>LINING</td><td>0.35</td><td>₹0.26</td></tr>
+<tr><td>40</td><td>5270</td><td>Marking Flap Plain x2</td><td>TABLE</td><td>FLAP</td><td>0.47</td><td>₹0.35</td></tr>
+<tr><td>48</td><td>5061</td><td>Join Backseam- No Neck Tape x1 Jkt</td><td>SNCS</td><td>BACK</td><td>0.5</td><td>₹0.38</td></tr>
+<tr><td>51</td><td>5073</td><td>Loading Line-no.3 Body- Jkt</td><td>TABLE</td><td>BODY</td><td>0.27</td><td>₹0.2</td></tr>
+<tr><td>88</td><td>5213</td><td>Press Sideseam& Backseam Open Jkt</td><td>IRONING TABLE</td><td>ASSE-1</td><td>0.7</td><td>₹0.53</td></tr>
+<tr><td>121</td><td>5947</td><td>Matching Sleeve with Body to Single Pcs- Jkt</td><td>TABLE</td><td>ASSE-2</td><td>0.7</td><td>₹0.53</td></tr>
+<tr><td>136</td><td>10782</td><td>Sewing Dispatch- Jacket</td><td>TABLE</td><td>POST ASSEMBLY</td><td>0.48</td><td>₹0.36</td></tr></tbody>
+  </table>
 </div>
-{% endblock %}
 
-{% block scripts %}
-<script>
-// Search functionality
-document.getElementById('searchOperations').addEventListener('keyup', function() {
-    const searchTerm = this.value.toLowerCase();
-    const table = document.getElementById('operationsTable');
-    if (table) {
-        const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+  </main>
+</div>
+<script src="app.js"></script>
 
-        for (let row of rows) {
-            const text = row.textContent.toLowerCase();
-            row.style.display = text.includes(searchTerm) ? '' : 'none';
-        }
-    }
-});
-</script>
-{% endblock %}
+</body></html>

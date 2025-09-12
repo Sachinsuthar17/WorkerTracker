@@ -1,94 +1,52 @@
-{% extends "layout.html" %}
-
-{% block content %}
-<div class="page-header">
-    <h1><i class="fas fa-chart-bar"></i> Reports & Analytics</h1>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PMS • Reports</title>
+<link rel="stylesheet" href="style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrapper">
+  
+    <aside class="sidebar">
+      <div class="brand">PMS</div>
+      <nav><a class="" href="dashboard.html"><span>📊</span><span>Dashboard</span></a><a class="" href="workers.html"><span>👷</span><span>Workers</span></a><a class="" href="operations.html"><span>⚙️</span><span>Operations</span></a><a class="" href="bundles.html"><span>📦</span><span>Bundles</span></a><a class="" href="production.html"><span>🧾</span><span>Production Order</span></a><a class="" href="upload.html"><span>📂</span><span>File Upload</span></a><a class="" href="scanner.html"><span>🧪</span><span>ESP32 Scanner</span></a><a class="active" href="reports.html"><span>📑</span><span>Reports</span></a></nav>
+    </aside>
+    
+  <main class="content">
+    
+<div class="hd"><h2>Reports & Analytics</h2><button class="btn">📄 Export Report</button></div>
+<div class="grid cols-2">
+  <div class="card">
+    <h5>Worker Productivity</h5>
+    <div style="height:420px"><canvas id="workerChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h5>Earnings Summary</h5>
+    <div class="list" style="margin-top:8px">
+      <div class="item"><span>Rajesh Kumar</span><span>₹19.53</span></div>
+      <div class="item"><span>Priya Sharma</span><span>₹31.62</span></div>
+      <div class="item"><span>Amit Singh</span><span>₹61.38</span></div>
+      <div class="item"><span>Sunita Devi</span><span>₹50.22</span></div>
+      <div class="item"><span>Vikram Yadav</span><span>₹35.34</span></div>
+      <div class="item"><span>Kavita Patel</span><span>₹15.75</span></div>
+      <div class="item"><span>Ravi Gupta</span><span>₹9.88</span></div>
+      <div class="item"><span>Meera Joshi</span><span>₹20.90</span></div>
+    </div>
+  </div>
 </div>
 
-<!-- Worker Productivity Report -->
-<div class="card">
-    <div class="card-header">
-        <h3><i class="fas fa-users"></i> Worker Productivity Report</h3>
-        <div class="card-actions">
-            <button class="btn btn--secondary" onclick="exportToExcel('worker_productivity')">
-                <i class="fas fa-download"></i> Export Excel
-            </button>
-        </div>
-    </div>
-    <div class="card-body">
-        {% if worker_stats %}
-        <div class="table-responsive">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Worker Name</th>
-                        <th>Department</th>
-                        <th>Total Pieces</th>
-                        <th>Total Earnings (₹)</th>
-                        <th>Avg Pieces/Day</th>
-                        <th>Efficiency</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for worker in worker_stats %}
-                    <tr>
-                        <td><strong>{{ worker.name }}</strong></td>
-                        <td>{{ worker.department }}</td>
-                        <td class="text-primary">{{ worker.total_pieces or 0 }}</td>
-                        <td class="text-success">{{ "%.2f"|format(worker.total_earnings or 0) }}</td>
-                        <td>{{ "%.1f"|format((worker.total_pieces or 0) / 7) }}</td>
-                        <td>
-                            {% set efficiency = ((worker.total_pieces or 0) / 100) * 100 %}
-                            <div class="efficiency-bar">
-                                <div class="efficiency-fill" style="width: {{ efficiency if efficiency <= 100 else 100 }}%"></div>
-                                <span>{{ "%.1f"|format(efficiency) }}%</span>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="empty-state">
-            <i class="fas fa-chart-bar"></i>
-            <h4>No Data Available</h4>
-            <p>Worker productivity data will appear here once production starts.</p>
-        </div>
-        {% endif %}
-    </div>
+  </main>
 </div>
+<script src="app.js"></script>
 
-<!-- Export Options -->
-<div class="card">
-    <div class="card-header">
-        <h3><i class="fas fa-download"></i> Data Export</h3>
-    </div>
-    <div class="card-body">
-        <div class="export-options">
-            <button class="btn btn--secondary" onclick="exportToExcel('workers')">
-                <i class="fas fa-users"></i> Export Workers Data
-            </button>
-            <button class="btn btn--secondary" onclick="exportToExcel('bundles')">
-                <i class="fas fa-boxes"></i> Export Bundles Data
-            </button>
-            <button class="btn btn--secondary" onclick="exportToExcel('production')">
-                <i class="fas fa-chart-line"></i> Export Production Data
-            </button>
-            <button class="btn btn--secondary" onclick="exportToExcel('earnings')">
-                <i class="fas fa-rupee-sign"></i> Export Earnings Report
-            </button>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
 <script>
-function exportToExcel(type) {
-    alert(`Exporting ${type} data to Excel...`);
-    // In a real implementation, this would download a file
-    // window.location.href = `/export/${type}?format=excel`;
-}
+barChart('workerChart',
+ ['Rajesh','Priya','Amit','Sunita','Vikram','Kavita','Ravi','Meera'],
+ [100,100,100,100,95,50,40,60],
+ {scales:{y:{beginAtZero:true, max:100}}}
+);
 </script>
-{% endblock %}
+
+</body></html>

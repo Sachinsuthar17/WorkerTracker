@@ -1,7 +1,154 @@
 {% extends "layout.html" %}
+
 {% block content %}
-<script>
-// Redirect to dashboard with production section
-window.location.href = "/#production";
-</script>
+<div class="page-header">
+    <h1><i class="fas fa-upload"></i> File Upload & Production Orders</h1>
+</div>
+
+<!-- File Upload Section -->
+<div class="upload-grid">
+    <!-- OB File Upload -->
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-file-excel"></i> Upload OB File</h3>
+            <p class="card-description">Operations Breakdown with piece rates</p>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('upload_ob_file') }}" enctype="multipart/form-data">
+                <div class="file-upload-area">
+                    <div class="file-upload-icon">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                    </div>
+                    <div class="file-upload-text">
+                        <strong>Choose OB File</strong> or drag and drop
+                    </div>
+                    <input type="file" class="file-input" id="ob_file" name="ob_file" accept=".xlsx,.xls,.csv">
+                </div>
+                <button type="submit" class="btn btn--primary btn--full">
+                    <i class="fas fa-upload"></i> Upload OB File
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Production Order Upload -->
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-clipboard-list"></i> Upload Production Order</h3>
+            <p class="card-description">Production orders with style & quantity details</p>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('upload_production_order') }}" enctype="multipart/form-data">
+                <div class="file-upload-area">
+                    <div class="file-upload-icon">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                    </div>
+                    <div class="file-upload-text">
+                        <strong>Choose Production Order File</strong> or drag and drop
+                    </div>
+                    <input type="file" class="file-input" id="production_file" name="production_file" accept=".xlsx,.xls,.csv">
+                </div>
+                <button type="submit" class="btn btn--primary btn--full">
+                    <i class="fas fa-upload"></i> Upload Production Order
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Production Orders List -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-list"></i> Production Orders</h3>
+    </div>
+    <div class="card-body">
+        {% if production_orders %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Order No</th>
+                        <th>Style Number</th>
+                        <th>Style Name</th>
+                        <th>Buyer</th>
+                        <th>Total Quantity</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Bundles</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for order in production_orders %}
+                    <tr>
+                        <td><strong>{{ order.order_no }}</strong></td>
+                        <td>{{ order.style_number }}</td>
+                        <td>{{ order.style_name or '-' }}</td>
+                        <td>{{ order.buyer or '-' }}</td>
+                        <td>{{ order.total_quantity }}</td>
+                        <td>
+                            <span class="status status--{{ 'success' if order.status == 'active' else 'error' }}">
+                                {{ order.status.title() }}
+                            </span>
+                        </td>
+                        <td>{{ order.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td>
+                            <span class="badge">{{ order.bundles|length }} bundles</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-clipboard-list"></i>
+            <h4>No Production Orders</h4>
+            <p>Upload a production order file to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- OB Files History -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-history"></i> OB Files History</h3>
+    </div>
+    <div class="card-body">
+        {% if ob_files %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>File Name</th>
+                        <th>Original Name</th>
+                        <th>Operations Count</th>
+                        <th>Status</th>
+                        <th>Upload Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ob_file in ob_files %}
+                    <tr>
+                        <td><code>{{ ob_file.file_name }}</code></td>
+                        <td>{{ ob_file.original_filename }}</td>
+                        <td>{{ ob_file.total_operations }}</td>
+                        <td>
+                            <span class="status status--success">{{ ob_file.status.title() }}</span>
+                        </td>
+                        <td>{{ ob_file.upload_date.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-file-excel"></i>
+            <h4>No OB Files Uploaded</h4>
+            <p>Upload an OB file to see operations data.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}

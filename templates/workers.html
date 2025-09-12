@@ -1,7 +1,135 @@
 {% extends "layout.html" %}
+
 {% block content %}
+<div class="page-header">
+    <h1><i class="fas fa-users"></i> Workers Management</h1>
+</div>
+
+<!-- Add Worker Form -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-user-plus"></i> Add New Worker</h3>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('add_worker') }}" class="form-inline">
+            <div class="form-group">
+                <label for="name">Worker Name</label>
+                <input type="text" class="form-control" id="name" name="name" required>
+            </div>
+            <div class="form-group">
+                <label for="token_id">Token ID</label>
+                <input type="text" class="form-control" id="token_id" name="token_id" required>
+            </div>
+            <div class="form-group">
+                <label for="department">Department</label>
+                <select class="form-control" id="department" name="department" required>
+                    <option value="">Select Department</option>
+                    <option value="SLEEVE">Sleeve</option>
+                    <option value="COLLAR">Collar</option>
+                    <option value="LINING">Lining</option>
+                    <option value="BODY">Body</option>
+                    <option value="FLAP">Flap</option>
+                    <option value="BACK">Back</option>
+                    <option value="ASSE-1">Assembly 1</option>
+                    <option value="ASSE-2">Assembly 2</option>
+                    <option value="POST ASSEMBLY">Post Assembly</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="line">Production Line</label>
+                <select class="form-control" id="line" name="line">
+                    <option value="">Select Line</option>
+                    <option value="Line-1">Line 1</option>
+                    <option value="Line-2">Line 2</option>
+                    <option value="Line-3">Line 3</option>
+                    <option value="Line-4">Line 4</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn--primary">
+                <i class="fas fa-plus"></i> Add Worker
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Workers List -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-list"></i> Workers List</h3>
+        <div class="card-actions">
+            <input type="text" class="search-input" id="searchWorkers" placeholder="Search workers...">
+        </div>
+    </div>
+    <div class="card-body">
+        {% if workers %}
+        <div class="table-responsive">
+            <table class="data-table" id="workersTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Token ID</th>
+                        <th>Department</th>
+                        <th>Line</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for worker in workers %}
+                    <tr>
+                        <td>{{ worker.id }}</td>
+                        <td>{{ worker.name }}</td>
+                        <td><code>{{ worker.token_id }}</code></td>
+                        <td>{{ worker.department }}</td>
+                        <td>{{ worker.line or '-' }}</td>
+                        <td>
+                            <span class="status status--{{ 'success' if worker.status == 'active' else 'error' }}">
+                                {{ worker.status.title() }}
+                            </span>
+                        </td>
+                        <td>{{ worker.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <a href="{{ url_for('worker_qr_code', worker_id=worker.id) }}" 
+                                   class="btn btn--sm btn--secondary" target="_blank">
+                                    <i class="fas fa-qrcode"></i>
+                                </a>
+                                <a href="{{ url_for('toggle_worker', worker_id=worker.id) }}" 
+                                   class="btn btn--sm btn--{{ 'warning' if worker.status == 'active' else 'success' }}">
+                                    <i class="fas fa-{{ 'pause' if worker.status == 'active' else 'play' }}"></i>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-users"></i>
+            <h4>No Workers Found</h4>
+            <p>Add your first worker to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
-// Redirect to dashboard with workers section
-window.location.href = "/#workers";
+// Search functionality
+document.getElementById('searchWorkers').addEventListener('keyup', function() {
+    const searchTerm = this.value.toLowerCase();
+    const table = document.getElementById('workersTable');
+    const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+
+    for (let row of rows) {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(searchTerm) ? '' : 'none';
+    }
+});
 </script>
 {% endblock %}

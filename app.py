@@ -1,646 +1,547 @@
 import os
 import io
-import sqlite3
-from datetime import datetime, timedelta
-from typing import Tuple, Optional
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, send_file
-from flask_cors import CORS
-import segno
 import json
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import Optional
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, send_file
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
+from werkzeug.utils import secure_filename
+import qrcode
+import segno
+from sqlalchemy import func
+import math
 
-# -----------------------------------------------------------------------------
-# App config
-# -----------------------------------------------------------------------------
-APP_BRAND = os.getenv("APP_BRAND", "Production Scanner")
-DEVICE_SECRET = os.getenv("DEVICE_SECRET", "u38fh39fh28fh92hf928hfh92hF9H2hf92h3f9h2F")
-RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "2.00"))
-DATABASE_PATH = "production.db"
-
+# App configuration
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-key-change-in-production")
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'production-secret-key-2024')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///production.db')
+if app.config['SQLALCHEMY_DATABASE_URI'].startswith('postgres://'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+
+# Initialize extensions
+db = SQLAlchemy(app)
 CORS(app)
 
-# -----------------------------------------------------------------------------
-# Database helpers
-# -----------------------------------------------------------------------------
-def get_db():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Ensure directories exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs('static/qrcodes', exist_ok=True)
 
-def init_db():
-    """Initialize database with all required tables"""
-    conn = get_db()
-    cursor = conn.cursor()
+# Database Models
+class Worker(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    token_id = db.Column(db.String(50), unique=True, nullable=False)
+    department = db.Column(db.String(50), nullable=False)
+    line = db.Column(db.String(20), nullable=True)
+    status = db.Column(db.String(20), default='active')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Workers table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS workers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            token_id TEXT UNIQUE NOT NULL,
-            department TEXT DEFAULT '',
-            status TEXT DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    worker_bundles = db.relationship('WorkerBundle', backref='worker', lazy=True)
+    logs = db.relationship('WorkerLog', backref='worker', lazy=True)
+
+class Operation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    op_no = db.Column(db.String(10), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    machine = db.Column(db.String(100))
+    sub_section = db.Column(db.String(100))
+    std_min = db.Column(db.Float, default=0.0)
+    piece_rate = db.Column(db.Float, default=0.0)
+    department = db.Column(db.String(50))
+    skill_level = db.Column(db.String(20))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ProductionOrder(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_no = db.Column(db.String(50), unique=True, nullable=False)
+    style_number = db.Column(db.String(100), nullable=False)
+    style_name = db.Column(db.String(200))
+    buyer = db.Column(db.String(100))
+    total_quantity = db.Column(db.Integer, nullable=False)
+    order_date = db.Column(db.DateTime, default=datetime.utcnow)
+    delivery_date = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default='active')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    bundles = db.relationship('Bundle', backref='production_order', lazy=True)
+
+class OBFile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    file_name = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255))
+    upload_date = db.Column(db.DateTime, default=datetime.utcnow)
+    parsed_data = db.Column(db.Text)
+    total_operations = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(20), default='processed')
+
+class Bundle(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    production_order_id = db.Column(db.Integer, db.ForeignKey('production_order.id'), nullable=False)
+    bundle_no = db.Column(db.String(50), nullable=False)
+    size = db.Column(db.String(10))
+    color = db.Column(db.String(50))
+    qty_per_bundle = db.Column(db.Integer, nullable=False)
+    assigned_line = db.Column(db.String(20))
+    status = db.Column(db.String(20), default='pending')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    worker_bundles = db.relationship('WorkerBundle', backref='bundle', lazy=True)
+
+class WorkerBundle(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    worker_id = db.Column(db.Integer, db.ForeignKey('worker.id'), nullable=False)
+    bundle_id = db.Column(db.Integer, db.ForeignKey('bundle.id'), nullable=False)
+    operation_id = db.Column(db.Integer, db.ForeignKey('operation.id'), nullable=False)
+    pieces_completed = db.Column(db.Integer, default=0)
+    earnings = db.Column(db.Float, default=0.0)
+    assigned_at = db.Column(db.DateTime, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default='assigned')
+
+    operation = db.relationship('Operation', backref='worker_bundles')
+
+class WorkerLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    worker_id = db.Column(db.Integer, db.ForeignKey('worker.id'), nullable=False)
+    action_type = db.Column(db.String(50), nullable=False)
+    details = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Utility Functions
+def parse_ob_file(file_path):
+    """Parse OB (Operations Breakdown) Excel file"""
+    try:
+        df = pd.read_excel(file_path)
+        operations_data = []
+
+        for _, row in df.iterrows():
+            std_min = float(row.get('StdMin', 0) or 0)
+            piece_rate = std_min * 0.75  # ₹0.75 per standard minute
+
+            operation_data = {
+                'op_no': str(row.get('OpNo', '')),
+                'name': str(row.get('Description', '')),
+                'machine': str(row.get('Machine', '')),
+                'sub_section': str(row.get('SubSection', '')),
+                'std_min': std_min,
+                'piece_rate': piece_rate,
+                'department': str(row.get('SubSection', ''))
+            }
+            operations_data.append(operation_data)
+
+        return operations_data
+    except Exception as e:
+        print(f"Error parsing OB file: {str(e)}")
+        return []
+
+def parse_production_order_file(file_path):
+    """Parse Production Order file"""
+    try:
+        try:
+            df = pd.read_excel(file_path)
+        except:
+            df = pd.read_csv(file_path)
+
+        production_orders = []
+        for _, row in df.iterrows():
+            order_data = {
+                'order_no': str(row.get('Order No', '') or row.get('order_no', '')),
+                'style_number': str(row.get('Style Number', '') or row.get('style_number', '')),
+                'style_name': str(row.get('Style Name', '') or row.get('style_name', '')),
+                'buyer': str(row.get('Buyer', '') or row.get('buyer', '')),
+                'total_quantity': int(row.get('Total Quantity', 0) or row.get('total_quantity', 0))
+            }
+            if order_data['order_no'] and order_data['total_quantity'] > 0:
+                production_orders.append(order_data)
+
+        return production_orders
+    except Exception as e:
+        print(f"Error parsing Production Order file: {str(e)}")
+        return []
+
+def generate_bundles(production_order_id, total_quantity):
+    """Generate 12 bundles for a production order"""
+    bundles = []
+    bundle_qty = math.ceil(total_quantity / 12)
+
+    production_order = ProductionOrder.query.get(production_order_id)
+    if not production_order:
+        return []
+
+    for i in range(12):
+        if i == 11:  # Last bundle
+            remaining_qty = total_quantity - (bundle_qty * 11)
+            if remaining_qty > 0:
+                current_bundle_qty = remaining_qty
+            else:
+                continue
+        else:
+            current_bundle_qty = bundle_qty
+
+        bundle = Bundle(
+            production_order_id=production_order_id,
+            bundle_no=f"{production_order.order_no}-B{i+1:02d}",
+            qty_per_bundle=current_bundle_qty,
+            assigned_line=f"Line-{(i % 4) + 1}",
+            status='pending'
         )
-    ''')
+        bundles.append(bundle)
 
-    # Operations table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS operations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            operation_code TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    return bundles
 
-    # Scans table (for barcode scans)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS scans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            worker_id INTEGER NOT NULL,
-            barcode TEXT,
-            operation_code TEXT,
-            scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (worker_id) REFERENCES workers(id)
-        )
-    ''')
+def generate_worker_qr_code(worker_id):
+    """Generate QR code for worker"""
+    worker = Worker.query.get(worker_id)
+    if not worker:
+        return None
 
-    # Production logs table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS production_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            worker_id INTEGER NOT NULL,
-            operation_id INTEGER NOT NULL,
-            quantity INTEGER NOT NULL DEFAULT 1,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'completed',
-            FOREIGN KEY (worker_id) REFERENCES workers(id),
-            FOREIGN KEY (operation_id) REFERENCES operations(id)
-        )
-    ''')
+    qr_data = f"W:{worker.token_id}"
+    qr = segno.make(qr_data)
 
-    # App state table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS app_state (
-            id INTEGER PRIMARY KEY,
-            current_worker_id INTEGER NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (current_worker_id) REFERENCES workers(id)
-        )
-    ''')
+    filename = f"worker_{worker_id}.png"
+    filepath = os.path.join('static/qrcodes', filename)
+    qr.save(filepath, scale=8)
 
-    # Insert default app state if not exists
-    cursor.execute("INSERT OR IGNORE INTO app_state (id) VALUES (1)")
+    return filename
 
-    # Insert sample operations if empty
-    cursor.execute("SELECT COUNT(*) FROM operations")
-    if cursor.fetchone()[0] == 0:
-        sample_ops = [
-            ("Cutting", "Fabric cutting operation", "CUT"),
-            ("Sewing", "Sewing operation", "SEW"),
-            ("Quality Check", "Quality inspection", "QC"),
-            ("Packing", "Final packing", "PACK")
-        ]
-        cursor.executemany(
-            "INSERT INTO operations (name, description, operation_code) VALUES (?, ?, ?)",
-            sample_ops
-        )
-
-    conn.commit()
-    conn.close()
-
-def get_active_worker():
-    """Get currently active worker"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT w.id, w.name, w.token_id, w.department, w.status
-        FROM app_state a
-        LEFT JOIN workers w ON w.id = a.current_worker_id
-        WHERE a.id = 1
-    ''')
-    result = cursor.fetchone()
-    conn.close()
-    return dict(result) if result and result[0] else None
-
-def set_active_worker(worker_id):
-    """Set active worker"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE app_state 
-        SET current_worker_id = ?, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = 1
-    ''', (worker_id,))
-    conn.commit()
-    conn.close()
-
-# Initialize database on startup
-init_db()
-
-# -----------------------------------------------------------------------------
-# Template globals
-# -----------------------------------------------------------------------------
-@app.context_processor
-def inject_globals():
-    return {
-        'brand': APP_BRAND,
-        'rate_per_piece': RATE_PER_PIECE,
-        'now': datetime.now
-    }
-
-# -----------------------------------------------------------------------------
-# Routes - Main Pages
-# -----------------------------------------------------------------------------
+# Routes
 @app.route('/')
 def dashboard():
-    """Main dashboard page"""
-    return render_template('dashboard.html')
+    """Main dashboard"""
+    total_workers = Worker.query.filter_by(status='active').count()
+    total_bundles = Bundle.query.count()
+    pending_bundles = Bundle.query.filter_by(status='pending').count()
+    completed_bundles = Bundle.query.filter_by(status='completed').count()
+
+    recent_logs = db.session.query(WorkerLog, Worker.name).\
+        join(Worker).order_by(WorkerLog.timestamp.desc()).limit(10).all()
+
+    return render_template('dashboard.html',
+                         total_workers=total_workers,
+                         total_bundles=total_bundles,
+                         pending_bundles=pending_bundles,
+                         completed_bundles=completed_bundles,
+                         recent_logs=recent_logs)
 
 @app.route('/workers')
 def workers():
     """Workers management page"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM workers ORDER BY created_at DESC")
-    workers = cursor.fetchall()
-    active_worker = get_active_worker()
-    conn.close()
+    workers = Worker.query.order_by(Worker.created_at.desc()).all()
+    return render_template('workers.html', workers=workers)
 
-    return render_template('workers.html', 
-                         workers=workers, 
-                         active_worker=active_worker)
+@app.route('/production')
+def production():
+    """Production management page"""
+    production_orders = ProductionOrder.query.order_by(ProductionOrder.created_at.desc()).all()
+    ob_files = OBFile.query.order_by(OBFile.upload_date.desc()).all()
+    return render_template('production.html', 
+                         production_orders=production_orders,
+                         ob_files=ob_files)
 
 @app.route('/operations')
 def operations():
     """Operations management page"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM operations ORDER BY created_at DESC")
-    operations = cursor.fetchall()
-    conn.close()
-
+    operations = Operation.query.order_by(Operation.op_no).all()
     return render_template('operations.html', operations=operations)
 
-@app.route('/production')
-def production():
-    """Production logging page"""
-    conn = get_db()
-    cursor = conn.cursor()
-
-    # Get production logs with worker and operation names
-    cursor.execute('''
-        SELECT pl.id, w.name as worker_name, o.name as operation_name,
-               pl.quantity, pl.timestamp, pl.status
-        FROM production_logs pl
-        JOIN workers w ON w.id = pl.worker_id
-        JOIN operations o ON o.id = pl.operation_id
-        ORDER BY pl.timestamp DESC
-        LIMIT 50
-    ''')
-    production_logs = cursor.fetchall()
-
-    # Get workers and operations for form dropdowns
-    cursor.execute("SELECT * FROM workers WHERE status = 'active' ORDER BY name")
-    workers = cursor.fetchall()
-
-    cursor.execute("SELECT * FROM operations ORDER BY name")
-    operations = cursor.fetchall()
-
-    conn.close()
-
-    return render_template('production.html', 
-                         production_logs=production_logs,
-                         workers=workers,
-                         operations=operations)
+@app.route('/bundles')
+def bundles():
+    """Bundle management page"""
+    bundles = db.session.query(Bundle, ProductionOrder.style_number).\
+        join(ProductionOrder).order_by(Bundle.created_at.desc()).all()
+    workers = Worker.query.filter_by(status='active').all()
+    return render_template('bundles.html', bundles=bundles, workers=workers)
 
 @app.route('/reports')
 def reports():
-    """Reports and analytics page"""
-    return render_template('reports.html')
+    """Reports page"""
+    worker_stats = db.session.query(
+        Worker.name,
+        Worker.department,
+        func.sum(WorkerBundle.pieces_completed).label('total_pieces'),
+        func.sum(WorkerBundle.earnings).label('total_earnings')
+    ).join(WorkerBundle).group_by(Worker.id).all()
 
-@app.route('/settings')
-def settings():
-    """System settings page"""
-    return render_template('settings.html',
-                         device_secret=DEVICE_SECRET,
-                         rate_per_piece=RATE_PER_PIECE,
-                         brand=APP_BRAND)
+    return render_template('reports.html', worker_stats=worker_stats)
 
-# -----------------------------------------------------------------------------
 # Worker Management Routes
-# -----------------------------------------------------------------------------
 @app.route('/add_worker', methods=['POST'])
 def add_worker():
     """Add new worker"""
     name = request.form.get('name', '').strip()
     token_id = request.form.get('token_id', '').strip()
     department = request.form.get('department', '').strip()
+    line = request.form.get('line', '').strip()
 
     if not name or not token_id:
         flash('Name and Token ID are required', 'error')
         return redirect(url_for('workers'))
 
-    conn = get_db()
-    cursor = conn.cursor()
+    existing_worker = Worker.query.filter_by(token_id=token_id).first()
+    if existing_worker:
+        flash('Token ID already exists', 'error')
+        return redirect(url_for('workers'))
+
+    worker = Worker(
+        name=name,
+        token_id=token_id,
+        department=department,
+        line=line
+    )
 
     try:
-        cursor.execute('''
-            INSERT INTO workers (name, token_id, department)
-            VALUES (?, ?, ?)
-        ''', (name, token_id, department))
-        conn.commit()
+        db.session.add(worker)
+        db.session.commit()
+        generate_worker_qr_code(worker.id)
         flash(f'Worker {name} added successfully', 'success')
-    except sqlite3.IntegrityError:
-        flash('Token ID already exists', 'error')
-    finally:
-        conn.close()
+    except Exception as e:
+        db.session.rollback()
+        flash('Error adding worker', 'error')
 
     return redirect(url_for('workers'))
+
+@app.route('/worker/<int:worker_id>/qr')
+def worker_qr_code(worker_id):
+    """Get worker QR code"""
+    worker = Worker.query.get_or_404(worker_id)
+    qr_filename = generate_worker_qr_code(worker_id)
+    if qr_filename:
+        return send_file(f'static/qrcodes/{qr_filename}', mimetype='image/png')
+    return "QR Code not found", 404
 
 @app.route('/toggle_worker/<int:worker_id>')
 def toggle_worker(worker_id):
-    """Toggle worker active status"""
-    conn = get_db()
-    cursor = conn.cursor()
+    """Toggle worker status"""
+    worker = Worker.query.get_or_404(worker_id)
+    worker.status = 'inactive' if worker.status == 'active' else 'active'
 
-    cursor.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
-    current_status = cursor.fetchone()[0]
-    new_status = 'inactive' if current_status == 'active' else 'active'
+    try:
+        db.session.commit()
+        flash(f'Worker status updated to {worker.status}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash('Error updating worker status', 'error')
 
-    cursor.execute("UPDATE workers SET status = ? WHERE id = ?", (new_status, worker_id))
-    conn.commit()
-    conn.close()
-
-    flash(f'Worker status updated to {new_status}', 'success')
     return redirect(url_for('workers'))
 
-# -----------------------------------------------------------------------------
-# Operation Management Routes
-# -----------------------------------------------------------------------------
-@app.route('/add_operation', methods=['POST'])
-def add_operation():
-    """Add new operation"""
-    name = request.form.get('name', '').strip()
-    operation_code = request.form.get('operation_code', '').strip()
-    description = request.form.get('description', '').strip()
-
-    if not name or not operation_code:
-        flash('Name and Operation Code are required', 'error')
-        return redirect(url_for('operations'))
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('''
-            INSERT INTO operations (name, operation_code, description)
-            VALUES (?, ?, ?)
-        ''', (name, operation_code, description))
-        conn.commit()
-        flash(f'Operation {name} added successfully', 'success')
-    except sqlite3.IntegrityError:
-        flash('Operation Code already exists', 'error')
-    finally:
-        conn.close()
-
-    return redirect(url_for('operations'))
-
-# -----------------------------------------------------------------------------
-# Production Management Routes
-# -----------------------------------------------------------------------------
-@app.route('/add_production', methods=['POST'])
-def add_production():
-    """Add production log entry"""
-    worker_id = request.form.get('worker_id')
-    operation_id = request.form.get('operation_id')
-    quantity = request.form.get('quantity', '1')
-
-    if not worker_id or not operation_id:
-        flash('Worker and Operation are required', 'error')
+# File Upload Routes
+@app.route('/upload_ob_file', methods=['POST'])
+def upload_ob_file():
+    """Upload and parse OB file"""
+    if 'ob_file' not in request.files:
+        flash('No file selected', 'error')
         return redirect(url_for('production'))
 
-    try:
-        quantity = int(quantity)
-        if quantity <= 0:
-            raise ValueError()
-    except ValueError:
-        flash('Quantity must be a positive number', 'error')
+    file = request.files['ob_file']
+    if file.filename == '':
+        flash('No file selected', 'error')
         return redirect(url_for('production'))
 
-    conn = get_db()
-    cursor = conn.cursor()
+    if file:
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+        filename = timestamp + filename
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
 
-    cursor.execute('''
-        INSERT INTO production_logs (worker_id, operation_id, quantity)
-        VALUES (?, ?, ?)
-    ''', (worker_id, operation_id, quantity))
-    conn.commit()
-    conn.close()
+        operations_data = parse_ob_file(filepath)
 
-    flash(f'Production entry added: {quantity} pieces', 'success')
+        if operations_data:
+            ob_file = OBFile(
+                file_name=filename,
+                original_filename=file.filename,
+                parsed_data=json.dumps(operations_data),
+                total_operations=len(operations_data)
+            )
+            db.session.add(ob_file)
+
+            for op_data in operations_data:
+                existing_op = Operation.query.filter_by(op_no=op_data['op_no']).first()
+                if not existing_op:
+                    operation = Operation(
+                        op_no=op_data['op_no'],
+                        name=op_data['name'],
+                        description=op_data['name'],
+                        machine=op_data['machine'],
+                        sub_section=op_data['sub_section'],
+                        std_min=op_data['std_min'],
+                        piece_rate=op_data['piece_rate'],
+                        department=op_data['department']
+                    )
+                    db.session.add(operation)
+
+            try:
+                db.session.commit()
+                flash(f'OB file uploaded and {len(operations_data)} operations processed', 'success')
+            except Exception as e:
+                db.session.rollback()
+                flash('Error processing OB file', 'error')
+        else:
+            flash('Failed to parse OB file', 'error')
+
     return redirect(url_for('production'))
 
-# -----------------------------------------------------------------------------
-# QR Code Generation
-# -----------------------------------------------------------------------------
-@app.route('/workers/<int:worker_id>/qr.png')
-def worker_qr(worker_id):
-    """Generate QR code for worker"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT token_id FROM workers WHERE id = ?", (worker_id,))
-    result = cursor.fetchone()
-    conn.close()
+@app.route('/upload_production_order', methods=['POST'])
+def upload_production_order():
+    """Upload and parse Production Order file"""
+    if 'production_file' not in request.files:
+        flash('No file selected', 'error')
+        return redirect(url_for('production'))
 
-    if not result:
-        return "Worker not found", 404
+    file = request.files['production_file']
+    if file.filename == '':
+        flash('No file selected', 'error')
+        return redirect(url_for('production'))
 
-    # Create QR code with worker token
-    qr_data = f"W:{result[0]}"
-    qr = segno.make(qr_data)
+    if file:
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+        filename = timestamp + filename
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
 
-    # Create in-memory file
-    img_buffer = io.BytesIO()
-    qr.save(img_buffer, kind='png', scale=8)
-    img_buffer.seek(0)
+        production_orders_data = parse_production_order_file(filepath)
 
-    return send_file(img_buffer, mimetype='image/png')
+        if production_orders_data:
+            orders_created = 0
+            for order_data in production_orders_data:
+                existing_order = ProductionOrder.query.filter_by(order_no=order_data['order_no']).first()
+                if not existing_order:
+                    production_order = ProductionOrder(
+                        order_no=order_data['order_no'],
+                        style_number=order_data['style_number'],
+                        style_name=order_data['style_name'],
+                        buyer=order_data['buyer'],
+                        total_quantity=order_data['total_quantity']
+                    )
+                    db.session.add(production_order)
+                    db.session.flush()
 
-# -----------------------------------------------------------------------------
-# API Routes for Dashboard
-# -----------------------------------------------------------------------------
-@app.route('/api/stats')
-def api_stats():
-    """API endpoint for dashboard stats"""
-    conn = get_db()
-    cursor = conn.cursor()
-    today = datetime.now().strftime('%Y-%m-%d')
+                    bundles = generate_bundles(production_order.id, order_data['total_quantity'])
+                    for bundle in bundles:
+                        db.session.add(bundle)
 
-    # Get today's stats
-    cursor.execute("SELECT COUNT(*) FROM scans WHERE DATE(scanned_at) = ?", (today,))
-    pieces_today = cursor.fetchone()[0]
+                    orders_created += 1
 
-    cursor.execute("SELECT COUNT(DISTINCT worker_id) FROM scans WHERE DATE(scanned_at) = ?", (today,))
-    workers_today = cursor.fetchone()[0]
+            try:
+                db.session.commit()
+                flash(f'Production order file uploaded and {orders_created} orders with bundles created', 'success')
+            except Exception as e:
+                db.session.rollback()
+                flash('Error processing production order file', 'error')
+        else:
+            flash('Failed to parse production order file', 'error')
 
-    earnings_today = pieces_today * RATE_PER_PIECE
+    return redirect(url_for('production'))
 
-    cursor.execute("SELECT COUNT(*) FROM workers WHERE status = 'active'")
-    total_workers = cursor.fetchone()[0]
-
-    # Get active worker
-    active_worker = get_active_worker()
-
-    conn.close()
-
-    return jsonify({
-        'pieces_today': pieces_today,
-        'workers_today': workers_today,
-        'earnings_today': round(earnings_today, 2),
-        'total_workers': total_workers,
-        'active_worker': active_worker['name'] if active_worker else None
-    })
-
-@app.route('/api/activities')
-def api_activities():
-    """API endpoint for recent activities"""
-    limit = min(int(request.args.get('limit', 10)), 50)
-
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT w.name, w.department, s.barcode, s.scanned_at, s.operation_code
-        FROM scans s
-        JOIN workers w ON w.id = s.worker_id
-        ORDER BY s.scanned_at DESC
-        LIMIT ?
-    ''', (limit,))
-    results = cursor.fetchall()
-    conn.close()
-
-    activities = [{
-        'worker': row[0],
-        'department': row[1] or '',
-        'barcode': row[2] or '',
-        'timestamp': row[3],
-        'operation_code': row[4] or ''
-    } for row in results]
-
-    return jsonify({'activities': activities})
-
-# -----------------------------------------------------------------------------
-# ESP32 Unified Scan Endpoint
-# -----------------------------------------------------------------------------
+# ESP32 Scan Endpoint
 @app.route('/scan', methods=['POST'])
-def scan_unified():
-    """Unified endpoint for ESP32 barcode scanning"""
-    payload = request.get_json(force=True, silent=True) or {}
-
-    # Verify secret
-    if payload.get('secret') != DEVICE_SECRET:
-        return jsonify({
-            'ok': False,
-            'error': 'forbidden',
-            'message': 'Invalid device secret'
-        }), 403
-
-    token_id = payload.get('token_id', '').strip()
-    worker_name = payload.get('worker_name', '').strip()
-    barcode = payload.get('barcode', '').strip()
-
-    # Remove prefixes if present
-    if token_id.upper().startswith('W:'):
-        token_id = token_id[2:]
-    if barcode.upper().startswith('B:'):
-        barcode = barcode[2:]
-
-    conn = get_db()
-    cursor = conn.cursor()
-
+def scan_endpoint():
+    """ESP32 barcode/QR scanning endpoint"""
     try:
-        # Find worker by token_id or name
-        worker = None
-        if token_id:
-            cursor.execute("SELECT * FROM workers WHERE token_id = ? AND status = 'active'", (token_id,))
-            worker = cursor.fetchone()
+        data = request.get_json()
 
-        if not worker and worker_name:
-            cursor.execute("SELECT * FROM workers WHERE name = ? AND status = 'active'", (worker_name,))
-            worker = cursor.fetchone()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data received'}), 400
 
+        token_id = data.get('token_id', '').replace('W:', '')
+        action = data.get('action', 'login')
+
+        worker = Worker.query.filter_by(token_id=token_id, status='active').first()
         if not worker:
+            return jsonify({'success': False, 'message': 'Worker not found'}), 404
+
+        log_entry = WorkerLog(
+            worker_id=worker.id,
+            action_type=action,
+            details=json.dumps(data),
+            timestamp=datetime.utcnow()
+        )
+        db.session.add(log_entry)
+
+        if action in ['login', 'logout']:
+            db.session.commit()
             return jsonify({
-                'ok': False,
-                'status': 'error',
-                'message': 'Worker not found or inactive'
+                'success': True,
+                'message': f'Worker {worker.name} {action} successful',
+                'worker': {
+                    'id': worker.id,
+                    'name': worker.name,
+                    'department': worker.department,
+                    'line': worker.line
+                }
             })
 
-        worker = dict(worker)
+        elif action == 'scan_bundle':
+            bundle_no = data.get('bundle_no')
+            if bundle_no:
+                bundle = Bundle.query.filter_by(bundle_no=bundle_no).first()
+                if bundle:
+                    assignment = WorkerBundle.query.filter_by(
+                        worker_id=worker.id,
+                        bundle_id=bundle.id
+                    ).first()
 
-        # CASE 1: Worker QR scan (toggle login/logout)
-        if not barcode:
-            active_worker = get_active_worker()
-            if active_worker and active_worker['id'] == worker['id']:
-                # Same worker -> logout
-                set_active_worker(None)
-                status = 'logged_out'
-                effective_worker = None
-                message = f"Worker {worker['name']} logged out"
-            else:
-                # Different worker -> login
-                set_active_worker(worker['id'])
-                status = 'logged_in'
-                effective_worker = worker
-                message = f"Worker {worker['name']} logged in"
+                    if assignment:
+                        db.session.commit()
+                        return jsonify({
+                            'success': True,
+                            'message': f'Bundle {bundle_no} scanned',
+                            'bundle': {
+                                'id': bundle.id,
+                                'bundle_no': bundle.bundle_no,
+                                'qty_per_bundle': bundle.qty_per_bundle,
+                                'pieces_completed': assignment.pieces_completed
+                            }
+                        })
+                    else:
+                        return jsonify({'success': False, 'message': 'Bundle not assigned to this worker'}), 400
+                else:
+                    return jsonify({'success': False, 'message': 'Bundle not found'}), 404
 
-        # CASE 2: Barcode scan (save piece)
-        else:
-            active_worker = get_active_worker()
-            effective_worker = active_worker if active_worker else worker
-
-            # Extract operation code from barcode if present
-            operation_code = None
-            if '-' in barcode:
-                parts = barcode.split('-')
-                if len(parts) >= 2:
-                    operation_code = parts[0]
-
-            # Save scan
-            cursor.execute('''
-                INSERT INTO scans (worker_id, barcode, operation_code)
-                VALUES (?, ?, ?)
-            ''', (effective_worker['id'], barcode, operation_code))
-
-            status = 'saved'
-            message = f"Barcode {barcode} scanned for {effective_worker['name']}"
-
-        # Get today's stats for the effective worker
-        today = datetime.now().strftime('%Y-%m-%d')
-        pieces_count = 0
-        if effective_worker:
-            cursor.execute('''
-                SELECT COUNT(*) FROM scans 
-                WHERE worker_id = ? AND DATE(scanned_at) = ?
-            ''', (effective_worker['id'], today))
-            pieces_count = cursor.fetchone()[0]
-
-        earnings = pieces_count * RATE_PER_PIECE
-
-        conn.commit()
-        conn.close()
-
-        return jsonify({
-            'ok': True,
-            'status': status,
-            'message': message,
-            'active_worker': effective_worker or {},
-            'today_pieces': pieces_count,
-            'today_earn': round(earnings, 2),
-            'rate_per_piece': RATE_PER_PIECE
-        })
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Scan processed'})
 
     except Exception as e:
-        conn.close()
-        return jsonify({
-            'ok': False,
-            'status': 'error',
-            'message': f'Database error: {str(e)}'
-        }), 500
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
-# -----------------------------------------------------------------------------
-# Data Export Routes
-# -----------------------------------------------------------------------------
-@app.route('/export/workers')
-def export_workers():
-    """Export workers data as CSV"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM workers ORDER BY name")
-    workers = cursor.fetchall()
-    conn.close()
+# API Routes
+@app.route('/api/dashboard_stats')
+def api_dashboard_stats():
+    """API endpoint for dashboard statistics"""
+    total_workers = Worker.query.filter_by(status='active').count()
+    total_bundles = Bundle.query.count()
+    pending_bundles = Bundle.query.filter_by(status='pending').count()
+    in_progress_bundles = Bundle.query.filter_by(status='assigned').count()
+    completed_bundles = Bundle.query.filter_by(status='completed').count()
 
-    output = io.StringIO()
-    output.write("ID,Name,Token ID,Department,Status,Created At\n")
-    for worker in workers:
-        output.write(f"{worker[0]},{worker[1]},{worker[2]},{worker[3]},{worker[4]},{worker[5]}\n")
+    total_pieces = db.session.query(func.sum(WorkerBundle.pieces_completed)).scalar() or 0
+    total_earnings = db.session.query(func.sum(WorkerBundle.earnings)).scalar() or 0.0
 
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-    output.close()
+    return jsonify({
+        'total_workers': total_workers,
+        'total_bundles': total_bundles,
+        'pending_bundles': pending_bundles,
+        'in_progress_bundles': in_progress_bundles,
+        'completed_bundles': completed_bundles,
+        'total_pieces': total_pieces,
+        'total_earnings': round(total_earnings, 2)
+    })
 
-    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='workers.csv')
-
-@app.route('/export/scans')
-def export_scans():
-    """Export scans data as CSV"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.id, w.name, s.barcode, s.operation_code, s.scanned_at
-        FROM scans s
-        JOIN workers w ON w.id = s.worker_id
-        ORDER BY s.scanned_at DESC
-    ''')
-    scans = cursor.fetchall()
-    conn.close()
-
-    output = io.StringIO()
-    output.write("ID,Worker,Barcode,Operation Code,Scanned At\n")
-    for scan in scans:
-        output.write(f"{scan[0]},{scan[1]},{scan[2]},{scan[3]},{scan[4]}\n")
-
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-    output.close()
-
-    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='scans.csv')
-
-@app.route('/export/production')
-def export_production():
-    """Export production data as CSV"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT pl.id, w.name as worker_name, o.name as operation_name,
-               pl.quantity, pl.timestamp, pl.status
-        FROM production_logs pl
-        JOIN workers w ON w.id = pl.worker_id
-        JOIN operations o ON o.id = pl.operation_id
-        ORDER BY pl.timestamp DESC
-    ''')
-    logs = cursor.fetchall()
-    conn.close()
-
-    output = io.StringIO()
-    output.write("ID,Worker,Operation,Quantity,Timestamp,Status\n")
-    for log in logs:
-        output.write(f"{log[0]},{log[1]},{log[2]},{log[3]},{log[4]},{log[5]}\n")
-
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-    output.close()
-
-    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='production.csv')
-
-# -----------------------------------------------------------------------------
-# Error Handlers
-# -----------------------------------------------------------------------------
-@app.errorhandler(404)
-def not_found(error):
-    return render_template('dashboard.html'), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    return render_template('dashboard.html'), 500
+# Initialize database
+@app.before_first_request  
+def create_tables():
+    db.create_all()
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

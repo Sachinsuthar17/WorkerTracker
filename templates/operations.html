@@ -1,7 +1,73 @@
 {% extends "layout.html" %}
+
 {% block content %}
+<div class="page-header">
+    <h1><i class="fas fa-cogs"></i> Operations Management</h1>
+</div>
+
+<!-- Operations List -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-list"></i> All Operations</h3>
+        <div class="card-actions">
+            <input type="text" class="search-input" id="searchOperations" placeholder="Search operations...">
+        </div>
+    </div>
+    <div class="card-body">
+        {% if operations %}
+        <div class="table-responsive">
+            <table class="data-table" id="operationsTable">
+                <thead>
+                    <tr>
+                        <th>Op No</th>
+                        <th>Operation Name</th>
+                        <th>Machine</th>
+                        <th>Department</th>
+                        <th>Std Min</th>
+                        <th>Piece Rate (₹)</th>
+                        <th>Skill Level</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for operation in operations %}
+                    <tr>
+                        <td><strong>{{ operation.op_no }}</strong></td>
+                        <td>{{ operation.name }}</td>
+                        <td>{{ operation.machine or '-' }}</td>
+                        <td>{{ operation.department or operation.sub_section or '-' }}</td>
+                        <td>{{ "%.2f"|format(operation.std_min) }}</td>
+                        <td class="text-success">{{ "%.2f"|format(operation.piece_rate) }}</td>
+                        <td>{{ operation.skill_level or 'Medium' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-cogs"></i>
+            <h4>No Operations Found</h4>
+            <p>Upload an OB file to see operations data.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
-// Redirect to dashboard with operations section
-window.location.href = "/#operations";
+// Search functionality
+document.getElementById('searchOperations').addEventListener('keyup', function() {
+    const searchTerm = this.value.toLowerCase();
+    const table = document.getElementById('operationsTable');
+    if (table) {
+        const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+
+        for (let row of rows) {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(searchTerm) ? '' : 'none';
+        }
+    }
+});
 </script>
 {% endblock %}

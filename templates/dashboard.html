@@ -1,465 +1,153 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<!-- Dashboard Section -->
-<div class="content-section active" id="dashboard">
-    <div class="section-header">
-        <h1><i class="fas fa-tachometer-alt"></i> Dashboard</h1>
-        <div class="live-indicator">
-            <div class="pulse-dot"></div>
-            <span>Live</span>
+<div class="page-header">
+    <h1><i class="fas fa-tachometer-alt"></i> Production Dashboard</h1>
+    <div class="live-indicator">
+        <div class="pulse-dot"></div>
+        <span>Live</span>
+    </div>
+</div>
+
+<!-- Statistics Cards -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon">
+            <i class="fas fa-users"></i>
+        </div>
+        <div class="stat-content">
+            <div class="stat-value" id="totalWorkers">{{ total_workers }}</div>
+            <div class="stat-label">Active Workers</div>
         </div>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-box"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="piecesToday">0</div>
-                <div class="stat-label">Pieces Today</div>
-            </div>
+    <div class="stat-card">
+        <div class="stat-icon">
+            <i class="fas fa-boxes"></i>
         </div>
-
-        <div class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-users"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="workersActive">0</div>
-                <div class="stat-label">Workers Active</div>
-            </div>
-        </div>
-
-        <div class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-dollar-sign"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="earningsToday">$0.00</div>
-                <div class="stat-label">Earnings Today</div>
-            </div>
-        </div>
-
-        <div class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-user-friends"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="totalWorkers">0</div>
-                <div class="stat-label">Total Workers</div>
-            </div>
+        <div class="stat-content">
+            <div class="stat-value" id="totalBundles">{{ total_bundles }}</div>
+            <div class="stat-label">Total Bundles</div>
         </div>
     </div>
 
-    <!-- Dashboard Content Grid -->
-    <div class="dashboard-content">
-        <!-- Recent Activities -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-clock"></i> Recent Activities</h3>
-            </div>
-            <div class="card-body">
-                <div class="table-container">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Worker</th>
-                                <th>Department</th>
-                                <th>Barcode</th>
-                                <th>Timestamp</th>
-                            </tr>
-                        </thead>
-                        <tbody id="activitiesTable">
-                            <tr>
-                                <td colspan="4" class="text-center text-muted">
-                                    <i class="fas fa-spinner fa-spin"></i> Loading activities...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+    <div class="stat-card">
+        <div class="stat-icon">
+            <i class="fas fa-clock"></i>
         </div>
+        <div class="stat-content">
+            <div class="stat-value" id="pendingBundles">{{ pending_bundles }}</div>
+            <div class="stat-label">Pending Bundles</div>
+        </div>
+    </div>
 
-        <!-- Active Worker -->
-        <div class="card active-worker-card">
-            <div class="card-header">
-                <h3><i class="fas fa-user-check"></i> Currently Active Worker</h3>
-            </div>
-            <div class="card-body">
-                <div id="activeWorkerInfo">
-                    <div class="active-worker-info">
-                        <div class="worker-avatar">
-                            <i class="fas fa-user"></i>
-                        </div>
-                        <div>
-                            <div class="worker-name" id="activeWorkerName">No worker active</div>
-                            <div class="worker-department" id="activeWorkerDept">-</div>
-                        </div>
+    <div class="stat-card">
+        <div class="stat-icon">
+            <i class="fas fa-check-circle"></i>
+        </div>
+        <div class="stat-content">
+            <div class="stat-value" id="completedBundles">{{ completed_bundles }}</div>
+            <div class="stat-label">Completed Bundles</div>
+        </div>
+    </div>
+</div>
+
+<!-- Dashboard Content -->
+<div class="dashboard-grid">
+    <!-- Recent Activities -->
+    <div class="dashboard-card">
+        <div class="card-header">
+            <h3><i class="fas fa-history"></i> Recent Activities</h3>
+        </div>
+        <div class="card-body">
+            <div class="activities-list" id="recentActivities">
+                {% for log, worker_name in recent_logs %}
+                <div class="activity-item">
+                    <div class="activity-icon">
+                        <i class="fas fa-{{ 'sign-in-alt' if log.action_type == 'login' else 'sign-out-alt' if log.action_type == 'logout' else 'qrcode' }}"></i>
                     </div>
+                    <div class="activity-content">
+                        <div class="activity-title">{{ worker_name }}</div>
+                        <div class="activity-desc">{{ log.action_type.title() }}</div>
+                        <div class="activity-time">{{ log.timestamp.strftime('%H:%M') }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Bundle Status Overview -->
+    <div class="dashboard-card">
+        <div class="card-header">
+            <h3><i class="fas fa-chart-pie"></i> Bundle Status</h3>
+        </div>
+        <div class="card-body">
+            <div class="progress-overview">
+                <div class="progress-item">
+                    <div class="progress-label">Pending</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-pending" style="width: {{ (pending_bundles / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
+                    </div>
+                    <div class="progress-value">{{ pending_bundles }}</div>
+                </div>
+                <div class="progress-item">
+                    <div class="progress-label">In Progress</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-active" style="width: {{ ((total_bundles - pending_bundles - completed_bundles) / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
+                    </div>
+                    <div class="progress-value">{{ total_bundles - pending_bundles - completed_bundles }}</div>
+                </div>
+                <div class="progress-item">
+                    <div class="progress-label">Completed</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-completed" style="width: {{ (completed_bundles / total_bundles * 100) if total_bundles > 0 else 0 }}%"></div>
+                    </div>
+                    <div class="progress-value">{{ completed_bundles }}</div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Workers Section -->
-<div class="content-section" id="workers">
-    <div class="section-header">
-        <h1><i class="fas fa-users"></i> Workers Management</h1>
-    </div>
-
-    <div class="workers-content">
-        <!-- Add Worker Form -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-user-plus"></i> Add New Worker</h3>
-            </div>
-            <div class="card-body">
-                <form method="POST" action="/add_worker" id="addWorkerForm">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="name">Worker Name</label>
-                            <input type="text" class="form-control" id="name" name="name" required>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="token_id">Token ID</label>
-                            <input type="text" class="form-control" id="token_id" name="token_id" required>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="department">Department</label>
-                            <input type="text" class="form-control" id="department" name="department">
-                        </div>
-                        <div class="form-group">
-                            <button type="submit" class="btn btn--primary">
-                                <i class="fas fa-plus"></i> Add Worker
-                            </button>
-                        </div>
-                    </div>
-                </form>
-            </div>
+<!-- Additional Stats -->
+<div class="additional-stats">
+    <div class="stat-row">
+        <div class="stat-item">
+            <i class="fas fa-cut"></i>
+            <span class="stat-name">Total Pieces</span>
+            <span class="stat-number" id="totalPieces">-</span>
         </div>
-
-        <!-- Workers List -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-list"></i> Workers List</h3>
-            </div>
-            <div class="card-body">
-                <div class="table-container">
-                    <table class="data-table" id="workersTable">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Token ID</th>
-                                <th>Department</th>
-                                <th>Status</th>
-                                <th>Created</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="6" class="text-center">
-                                    <i class="fas fa-spinner fa-spin"></i> Loading workers...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="stat-item">
+            <i class="fas fa-rupee-sign"></i>
+            <span class="stat-name">Total Earnings</span>
+            <span class="stat-number" id="totalEarnings">-</span>
         </div>
     </div>
 </div>
+{% endblock %}
 
-<!-- Operations Section -->
-<div class="content-section" id="operations">
-    <div class="section-header">
-        <h1><i class="fas fa-cogs"></i> Operations Management</h1>
-    </div>
+{% block scripts %}
+<script>
+// Auto-refresh dashboard data
+function refreshDashboardStats() {
+    fetch('/api/dashboard_stats')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('totalWorkers').textContent = data.total_workers;
+            document.getElementById('totalBundles').textContent = data.total_bundles;
+            document.getElementById('pendingBundles').textContent = data.pending_bundles;
+            document.getElementById('completedBundles').textContent = data.completed_bundles;
+            document.getElementById('totalPieces').textContent = data.total_pieces;
+            document.getElementById('totalEarnings').textContent = '₹' + data.total_earnings;
+        })
+        .catch(error => console.error('Error fetching dashboard stats:', error));
+}
 
-    <div class="operations-content">
-        <!-- Add Operation Form -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-plus"></i> Add New Operation</h3>
-            </div>
-            <div class="card-body">
-                <form method="POST" action="/add_operation" id="addOperationForm">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="op_name">Operation Name</label>
-                            <input type="text" class="form-control" id="op_name" name="name" required>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="operation_code">Operation Code</label>
-                            <input type="text" class="form-control" id="operation_code" name="operation_code" required>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="op_description">Description</label>
-                            <input type="text" class="form-control" id="op_description" name="description">
-                        </div>
-                        <div class="form-group">
-                            <button type="submit" class="btn btn--primary">
-                                <i class="fas fa-plus"></i> Add Operation
-                            </button>
-                        </div>
-                    </div>
-                </form>
-                <div class="note">
-                    <i class="fas fa-info-circle"></i>
-                    <span>Barcode format: B:OP10-XXXX → OP10</span>
-                </div>
-            </div>
-        </div>
+// Refresh every 30 seconds
+setInterval(refreshDashboardStats, 30000);
 
-        <!-- Operations List -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-list"></i> Operations List</h3>
-            </div>
-            <div class="card-body">
-                <div class="table-container">
-                    <table class="data-table" id="operationsTable">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Code</th>
-                                <th>Description</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="4" class="text-center">
-                                    <i class="fas fa-spinner fa-spin"></i> Loading operations...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Production Section -->
-<div class="content-section" id="production">
-    <div class="section-header">
-        <h1><i class="fas fa-chart-line"></i> Production Logging</h1>
-    </div>
-
-    <div class="production-content">
-        <!-- Manual Production Log -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-edit"></i> Manual Production Log</h3>
-            </div>
-            <div class="card-body">
-                <form method="POST" action="/add_production" id="addProductionForm">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="prod_worker_id">Worker</label>
-                            <select class="form-control" id="prod_worker_id" name="worker_id" required>
-                                <option value="">Select Worker</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="prod_operation_id">Operation</label>
-                            <select class="form-control" id="prod_operation_id" name="operation_id" required>
-                                <option value="">Select Operation</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="quantity">Quantity</label>
-                            <input type="number" class="form-control" id="quantity" name="quantity" value="1" min="1" required>
-                        </div>
-                        <div class="form-group">
-                            <button type="submit" class="btn btn--primary">
-                                <i class="fas fa-plus"></i> Add Production
-                            </button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Recent Production Logs -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-history"></i> Recent Production Logs</h3>
-            </div>
-            <div class="card-body">
-                <div class="table-container">
-                    <table class="data-table" id="productionTable">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Worker</th>
-                                <th>Operation</th>
-                                <th>Quantity</th>
-                                <th>Timestamp</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="6" class="text-center">
-                                    <i class="fas fa-spinner fa-spin"></i> Loading production logs...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Reports Section -->
-<div class="content-section" id="reports">
-    <div class="section-header">
-        <h1><i class="fas fa-chart-bar"></i> Reports & Analytics</h1>
-    </div>
-
-    <div class="reports-content">
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-qrcode"></i>
-                </div>
-                <div class="stat-content">
-                    <div class="stat-value" id="scansToday">0</div>
-                    <div class="stat-label">Scans Today</div>
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-clipboard-list"></i>
-                </div>
-                <div class="stat-content">
-                    <div class="stat-value" id="productionEntries">0</div>
-                    <div class="stat-label">Production Entries</div>
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-boxes"></i>
-                </div>
-                <div class="stat-content">
-                    <div class="stat-value" id="totalQuantity">0</div>
-                    <div class="stat-label">Total Quantity</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Export Data -->
-        <div class="card export-section">
-            <div class="card-header">
-                <h3><i class="fas fa-download"></i> Export Data</h3>
-            </div>
-            <div class="card-body">
-                <div class="export-buttons">
-                    <a href="/export/workers" class="btn btn--secondary export-btn">
-                        <i class="fas fa-users"></i> Export Workers
-                    </a>
-                    <a href="/export/scans" class="btn btn--secondary export-btn">
-                        <i class="fas fa-qrcode"></i> Export Scans
-                    </a>
-                    <a href="/export/production" class="btn btn--secondary export-btn">
-                        <i class="fas fa-chart-line"></i> Export Production
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Settings Section -->
-<div class="content-section" id="settings">
-    <div class="section-header">
-        <h1><i class="fas fa-cog"></i> System Settings</h1>
-    </div>
-
-    <div class="settings-content">
-        <!-- System Information -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-info-circle"></i> System Information</h3>
-            </div>
-            <div class="card-body">
-                <div class="settings-grid">
-                    <div class="setting-item">
-                        <label>Application Name:</label>
-                        <span>{{ brand }}</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>Device Secret:</label>
-                        <span>{{ device_secret[:8] }}... (hidden for security)</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>Rate per Piece:</label>
-                        <span>${{ "%.2f"|format(rate_per_piece) }}</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>Database Type:</label>
-                        <span>SQLite (production.db)</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- API Endpoints -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-plug"></i> API Endpoints</h3>
-            </div>
-            <div class="card-body">
-                <div class="api-endpoints">
-                    <div class="endpoint-item">
-                        <div class="endpoint-method">POST</div>
-                        <div class="endpoint-path">/scan</div>
-                        <div class="endpoint-name">Scan Endpoint</div>
-                    </div>
-                    <div class="endpoint-item">
-                        <div class="endpoint-method">GET</div>
-                        <div class="endpoint-path">/api/stats</div>
-                        <div class="endpoint-name">Stats API</div>
-                    </div>
-                    <div class="endpoint-item">
-                        <div class="endpoint-method">GET</div>
-                        <div class="endpoint-path">/api/activities</div>
-                        <div class="endpoint-name">Activities API</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Environment Variables -->
-        <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-code"></i> Environment Variables</h3>
-            </div>
-            <div class="card-body">
-                <div class="env-note">
-                    <i class="fas fa-info-circle"></i>
-                    <div>
-                        <p>Environment variables are used to configure the application settings. These include database connections, API keys, and other sensitive configuration data.</p>
-                        <ul>
-                            <li><code>APP_BRAND</code> - Application brand name</li>
-                            <li><code>DEVICE_SECRET</code> - Secret key for ESP32 authentication</li>
-                            <li><code>RATE_PER_PIECE</code> - Earning rate per piece</li>
-                            <li><code>FLASK_SECRET</code> - Flask session secret</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+// Initial load
+refreshDashboardStats();
+</script>
 {% endblock %}

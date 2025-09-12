@@ -1,0 +1,79 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="fas fa-boxes"></i> Bundle Management</h1>
+</div>
+
+<!-- Bundles List -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fas fa-list"></i> All Bundles</h3>
+        <div class="card-actions">
+            <input type="text" class="search-input" id="searchBundles" placeholder="Search bundles...">
+        </div>
+    </div>
+    <div class="card-body">
+        {% if bundles %}
+        <div class="table-responsive">
+            <table class="data-table" id="bundlesTable">
+                <thead>
+                    <tr>
+                        <th>Bundle No</th>
+                        <th>Style</th>
+                        <th>Size</th>
+                        <th>Color</th>
+                        <th>Quantity</th>
+                        <th>Line</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for bundle, style_number in bundles %}
+                    <tr>
+                        <td><strong>{{ bundle.bundle_no }}</strong></td>
+                        <td>{{ style_number }}</td>
+                        <td>{{ bundle.size or '-' }}</td>
+                        <td>{{ bundle.color or '-' }}</td>
+                        <td>{{ bundle.qty_per_bundle }}</td>
+                        <td>{{ bundle.assigned_line or '-' }}</td>
+                        <td>
+                            <span class="status status--{{ 'warning' if bundle.status == 'pending' else 'info' if bundle.status == 'assigned' else 'success' if bundle.status == 'completed' else 'primary' }}">
+                                {{ bundle.status.replace('_', ' ').title() }}
+                            </span>
+                        </td>
+                        <td>{{ bundle.created_at.strftime('%Y-%m-%d') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-boxes"></i>
+            <h4>No Bundles Found</h4>
+            <p>Upload production orders to generate bundles.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Search functionality
+document.getElementById('searchBundles').addEventListener('keyup', function() {
+    const searchTerm = this.value.toLowerCase();
+    const table = document.getElementById('bundlesTable');
+    if (table) {
+        const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+
+        for (let row of rows) {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(searchTerm) ? '' : 'none';
+        }
+    }
+});
+</script>
+{% endblock %}

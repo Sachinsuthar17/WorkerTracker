@@ -1,6 +1,12 @@
-flask==2.3.3
-flask-cors==4.0.0
-segno==1.5.2
-gunicorn==21.2.0
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-CORS==4.0.0
+Werkzeug==2.3.7
+pandas==2.1.1
+openpyxl==3.1.2
 qrcode==7.4.2
-pillow==10.0.0
+segno==1.6.0
+gunicorn==21.2.0
+python-dotenv==1.0.0
+psycopg2-binary==2.9.7
+Pillow==10.0.1

@@ -3,83 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ brand }}{% endblock %}</title>
+    <title>{% block title %}Production Management System{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle" id="mobileMenuToggle">
-        <i class="fas fa-bars"></i>
-    </button>
+    <div class="app-container">
+        <!-- Mobile Menu Button -->
+        <button class="mobile-menu-btn" id="mobileMenuBtn">
+            <i class="fas fa-bars"></i>
+        </button>
 
-    <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <div class="logo">
-                <i class="fas fa-industry"></i>
-                <span>{{ brand }}</span>
-            </div>
-        </div>
-
-        <nav>
-            <ul class="sidebar-menu">
-                <li class="menu-item active" data-section="dashboard">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-tachometer-alt"></i>
-                        <span>Dashboard</span>
-                    </a>
-                </li>
-                <li class="menu-item" data-section="workers">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-users"></i>
-                        <span>Workers</span>
-                    </a>
-                </li>
-                <li class="menu-item" data-section="operations">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-cogs"></i>
-                        <span>Operations</span>
-                    </a>
-                </li>
-                <li class="menu-item" data-section="production">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-chart-line"></i>
-                        <span>Production</span>
-                    </a>
-                </li>
-                <li class="menu-item" data-section="reports">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-chart-bar"></i>
-                        <span>Reports</span>
-                    </a>
-                </li>
-                <li class="menu-item" data-section="settings">
-                    <a href="#" class="menu-link">
-                        <i class="fas fa-cog"></i>
-                        <span>Settings</span>
-                    </a>
-                </li>
-            </ul>
-        </nav>
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-content">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <div class="flash-messages">
-                    {% for category, message in messages %}
-                        <div class="alert alert--{{ 'success' if category == 'success' else 'error' }}">
-                            {{ message }}
-                            <button class="alert__close">&times;</button>
-                        </div>
-                    {% endfor %}
+        <!-- Sidebar -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="brand">
+                    <i class="fas fa-industry"></i>
+                    <span>Production Manager</span>
                 </div>
-            {% endif %}
-        {% endwith %}
+                <button class="mobile-toggle" id="mobileToggle">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
 
-        {% block content %}{% endblock %}
+            <div class="sidebar-menu">
+                <a href="{{ url_for('dashboard') }}" class="menu-item {{ 'active' if request.endpoint == 'dashboard' else '' }}">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="{{ url_for('workers') }}" class="menu-item {{ 'active' if request.endpoint == 'workers' else '' }}">
+                    <i class="fas fa-users"></i>
+                    <span>Workers</span>
+                </a>
+                <a href="{{ url_for('production') }}" class="menu-item {{ 'active' if request.endpoint == 'production' else '' }}">
+                    <i class="fas fa-upload"></i>
+                    <span>File Upload</span>
+                </a>
+                <a href="{{ url_for('operations') }}" class="menu-item {{ 'active' if request.endpoint == 'operations' else '' }}">
+                    <i class="fas fa-cogs"></i>
+                    <span>Operations</span>
+                </a>
+                <a href="{{ url_for('bundles') }}" class="menu-item {{ 'active' if request.endpoint == 'bundles' else '' }}">
+                    <i class="fas fa-boxes"></i>
+                    <span>Bundle Management</span>
+                </a>
+                <a href="{{ url_for('reports') }}" class="menu-item {{ 'active' if request.endpoint == 'reports' else '' }}">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Reports</span>
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-messages">
+                        {% for category, message in messages %}
+                            <div class="alert alert--{{ 'success' if category == 'success' else 'error' if category == 'error' else 'warning' }}">
+                                {{ message }}
+                                <button class="alert__close" onclick="this.parentElement.remove()">&times;</button>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>

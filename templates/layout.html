@@ -27,38 +27,27 @@
             </div>
 
             <div class="sidebar-menu">
-                <a href="{{ url_for('dashboard') if 'dashboard' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'dashboard' else '' }}">
+                <a href="{{ url_for('dashboard') }}" class="menu-item {{ 'active' if request.endpoint == 'dashboard' else '' }}">
                     <i class="fas fa-tachometer-alt"></i>
                     <span>Dashboard</span>
                 </a>
-
-                <a href="{{ url_for('workers') if 'workers' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'workers' else '' }}">
+                <a href="{{ url_for('workers') }}" class="menu-item {{ 'active' if request.endpoint == 'workers' else '' }}">
                     <i class="fas fa-users"></i>
                     <span>Workers</span>
                 </a>
-
-                <a href="{{ url_for('production') if 'production' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'production' else '' }}">
+                <a href="{{ url_for('production') }}" class="menu-item {{ 'active' if request.endpoint == 'production' else '' }}">
                     <i class="fas fa-upload"></i>
                     <span>File Upload</span>
                 </a>
-
-                <a href="{{ url_for('operations') if 'operations' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'operations' else '' }}">
+                <a href="{{ url_for('operations') }}" class="menu-item {{ 'active' if request.endpoint == 'operations' else '' }}">
                     <i class="fas fa-cogs"></i>
                     <span>Operations</span>
                 </a>
-
-                <a href="{{ url_for('bundles') if 'bundles' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'bundles' else '' }}">
+                <a href="{{ url_for('bundles') }}" class="menu-item {{ 'active' if request.endpoint == 'bundles' else '' }}">
                     <i class="fas fa-boxes"></i>
                     <span>Bundle Management</span>
                 </a>
-
-                <a href="{{ url_for('reports') if 'reports' in current_app.view_functions else '#' }}" 
-                   class="menu-item {{ 'active' if request.endpoint == 'reports' else '' }}">
+                <a href="{{ url_for('reports') }}" class="menu-item {{ 'active' if request.endpoint == 'reports' else '' }}">
                     <i class="fas fa-chart-bar"></i>
                     <span>Reports</span>
                 </a>

@@ -14,7 +14,7 @@ import psycopg2.extras
 # -------------------------
 # Config
 # -------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")  # e.g. Render Postgres connection URL
+DATABASE_URL = os.getenv("DATABASE_URL")  # Render Postgres connection URL
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "my-esp32-secret")
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
@@ -30,10 +30,11 @@ def get_conn():
 
 
 def init_db():
+    """Create tables if needed, patch/migrate missing columns, then seed if empty."""
     conn = get_conn()
     cur = conn.cursor()
 
-    # workers
+    # ---------- Create base tables (no-op if they exist) ----------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
             id SERIAL PRIMARY KEY,
@@ -47,7 +48,6 @@ def init_db():
         )
     """)
 
-    # operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id SERIAL PRIMARY KEY,
@@ -61,17 +61,13 @@ def init_db():
         )
     """)
 
-    # bundles
     cur.execute("""
         CREATE TABLE IF NOT EXISTS bundles (
-            id SERIAL PRIMARY KEY,
-            bundle_code TEXT UNIQUE,
-            qty INTEGER,
-            status TEXT
+            id SERIAL PRIMARY KEY
+            -- legacy schemas might have only id/qty/status; we add columns below safely
         )
     """)
 
-    # scan logs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
             id SERIAL PRIMARY KEY,
@@ -81,7 +77,6 @@ def init_db():
         )
     """)
 
-    # activities (for recent activity feed)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activities (
             id SERIAL PRIMARY KEY,
@@ -91,9 +86,43 @@ def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+
+    # ---------- Patch/migrate columns safely ----------
+    # workers
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_logged_in BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login TIMESTAMP")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_logout TIMESTAMP")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS line TEXT")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS department TEXT")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS name TEXT")
+    cur.execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS token_id TEXT")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_workers_token ON workers(token_id)")
+
+    # operations
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS seq_no INTEGER")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS op_no INTEGER")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS description TEXT")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS machine TEXT")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS department TEXT")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS std_min NUMERIC")
+    cur.execute("ALTER TABLE operations ADD COLUMN IF NOT EXISTS rate NUMERIC")
+
+    # bundles (this fixes your crash)
+    cur.execute("ALTER TABLE bundles ADD COLUMN IF NOT EXISTS bundle_code TEXT")
+    cur.execute("ALTER TABLE bundles ADD COLUMN IF NOT EXISTS qty INTEGER")
+    cur.execute("ALTER TABLE bundles ADD COLUMN IF NOT EXISTS status TEXT")
+    # Make bundle_code unique (index is enough; constraint optional)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bundles_code ON bundles(bundle_code)")
+
+    # scan_logs
+    cur.execute("ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS token_id TEXT")
+    cur.execute("ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scan_type TEXT")
+    cur.execute("ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMP DEFAULT NOW()")
+
     conn.commit()
 
-    # seed workers if empty
+    # ---------- Seed if empty ----------
+    # workers
     cur.execute("SELECT COUNT(*) FROM workers")
     if cur.fetchone()[0] == 0:
         departments = ["SLEEVE","COLLAR","LINING","BODY","ASSE-1","ASSE-2","FLAP","BACK","POST ASSEMBLY"]
@@ -111,7 +140,7 @@ def init_db():
             rows
         )
 
-    # seed operations if empty
+    # operations
     cur.execute("SELECT COUNT(*) FROM operations")
     if cur.fetchone()[0] == 0:
         machines = ["SNLS","OL","FOA","BH","BARTACK"]
@@ -134,7 +163,7 @@ def init_db():
             rows
         )
 
-    # seed bundles if empty
+    # bundles
     cur.execute("SELECT COUNT(*) FROM bundles")
     if cur.fetchone()[0] == 0:
         seed = [
@@ -155,7 +184,7 @@ def init_db():
 
 
 # -------------------------
-# Safe one-time init (works on Flask 3.x)
+# Safe one-time init (Flask 3.x compatible)
 # -------------------------
 _initialized = False
 _init_lock = threading.Lock()
@@ -170,7 +199,6 @@ def _ensure_initialized():
                     init_db()
                     _initialized = True
                 except Exception as e:
-                    # Don't crash the worker; log and continue so health checks still pass
                     app.logger.exception("Database initialization failed: %s", e)
 
 
@@ -187,7 +215,7 @@ def health():
 # -------------------------
 @app.route("/")
 def index():
-    # Expect templates/index.html from your SPA (Option B)
+    # Expect templates/index.html for your UI (Option B)
     return render_template("index.html")
 
 
@@ -213,7 +241,6 @@ def api_stats():
     cur.execute("SELECT COUNT(*) FROM bundles")
     total_bundles = cur.fetchone()[0]
 
-    # naive earnings: count today's 'work' scans * RATE_PER_PIECE
     cur.execute("""
         SELECT COUNT(*) FROM scan_logs
         WHERE scan_type='work' AND DATE(scanned_at) = CURRENT_DATE
@@ -330,8 +357,8 @@ def api_operations():
         "description": r["description"],
         "machine": r["machine"],
         "department": r["department"],
-        "stdMin": float(r["std_min"]),
-        "rate": float(r["rate"])
+        "stdMin": float(r["std_min"]) if r["std_min"] is not None else 0.0,
+        "rate": float(r["rate"]) if r["rate"] is not None else 0.0
     } for r in rows]
     return jsonify(data)
 
@@ -340,7 +367,7 @@ def api_operations():
 def api_bundles():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT bundle_code, qty, status FROM bundles ORDER BY bundle_code")
+    cur.execute("SELECT bundle_code, qty, status FROM bundles ORDER BY bundle_code NULLS LAST")
     rows = cur.fetchall()
     conn.close()
     data = [{"id": r["bundle_code"], "qty": r["qty"], "status": r["status"]} for r in rows]
@@ -404,7 +431,6 @@ def api_upload_po():
 
 @app.route("/api/reports/earnings.csv")
 def api_report_earnings():
-    # Department earnings CSV (fake data for demo)
     departments = ["SLEEVE","COLLAR","LINING","BODY","ASSE-1","ASSE-2","FLAP","BACK"]
     def generate():
         yield "Department,Earnings\n"
@@ -473,7 +499,7 @@ def scan():
     """, (token_id,))
     scans_today = cur.fetchone()[0]
 
-    # also add an activity row for the feed
+    # add an activity row for the feed
     cur.execute("""
         INSERT INTO activities (actor, department, action)
         VALUES (%s, %s, %s)

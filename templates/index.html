@@ -1,74 +1,166 @@
-<!DOCTYPE html>
-</div>
-</section>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Factory Ops Dashboard</title>
 
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<!-- FILE UPLOAD -->
-<section id="file-upload" class="section">
-<div class="page-header"><h1>File Upload</h1></div>
-<div class="reports-grid">
-<div class="report-card">
-<div class="report-icon">📄</div>
-<h3>Upload OB File (Excel)</h3>
-<input type="file" id="obFileInput" accept=".xlsx,.xls" />
-<button class="btn-secondary" id="uploadObBtn">Upload</button>
-<p id="obUploadStatus" class="text-muted"></p>
-</div>
-<div class="report-card">
-<div class="report-icon">📋</div>
-<h3>Upload Production Order (PDF)</h3>
-<input type="file" id="poFileInput" accept=".pdf" />
-<button class="btn-secondary" id="uploadPoBtn">Upload</button>
-<p id="poUploadStatus" class="text-muted"></p>
-</div>
-</div>
-</section>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <!-- Topbar -->
+  <header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <h1 class="text-xl font-semibold tracking-tight">Factory Ops Dashboard</h1>
+      <nav class="flex gap-3 text-sm">
+        <a href="#overview" class="nav-link">Overview</a>
+        <a href="#workers" class="nav-link">Workers</a>
+        <a href="#bundles" class="nav-link">Bundles</a>
+        <a href="#uploads" class="nav-link">Uploads</a>
+        <a href="#scanner" class="nav-link">ESP32 Scan</a>
+        <a href="#reports" class="nav-link">Reports</a>
+      </nav>
+    </div>
+  </header>
 
+  <main class="max-w-7xl mx-auto px-4 py-6 space-y-10">
+    <!-- Overview -->
+    <section id="overview" class="space-y-6">
+      <h2 class="section-title">Overview</h2>
+      <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="card stat">
+          <div class="stat-label">Active Workers</div>
+          <div id="statActive" class="stat-value">—</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">Total Operations</div>
+          <div id="statOps" class="stat-value">—</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">Bundles</div>
+          <div id="statBundles" class="stat-value">—</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">Earnings (today)</div>
+          <div id="statEarnings" class="stat-value">—</div>
+        </div>
+      </div>
 
-<!-- ESP32 DEMO -->
-<section id="esp32-demo" class="section">
-<div class="page-header"><h1>ESP32 Scanner Demo</h1></div>
-<div class="reports-grid">
-<div class="report-card">
-<h3>Simulate Scan</h3>
-<input type="text" id="simulateToken" class="form-input" placeholder="Enter token id" />
-<select id="simulateType" class="form-input">
-<option value="work">Work</option>
-<option value="login">Login</option>
-<option value="logout">Logout</option>
-</select>
-<button class="btn-primary" id="simulateScanBtn">Simulate</button>
-<div id="scanResult" class="text-muted" style="margin-top: .75rem;"></div>
-</div>
-<div class="report-card">
-<h3>Scan Log</h3>
-<div id="scanLog"></div>
-</div>
-</div>
-</section>
+      <div class="grid gap-4 grid-cols-1 lg:grid-cols-3">
+        <div class="card lg:col-span-2">
+          <div class="card-title">Monthly Work Scans</div>
+          <canvas id="chartMonthly" height="140"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-title">Recent Activity</div>
+          <ul id="activityList" class="divide-y divide-slate-200"></ul>
+        </div>
+      </div>
+    </section>
 
+    <!-- Workers -->
+    <section id="workers" class="space-y-4">
+      <h2 class="section-title">Workers</h2>
+      <div class="card">
+        <div class="flex flex-wrap gap-3 items-center mb-4">
+          <input id="workerSearch" type="text" placeholder="Search name, token, line, dept…" class="input">
+          <select id="workerDept" class="input">
+            <option value="">All Departments</option>
+            <option>SLEEVE</option><option>COLLAR</option><option>LINING</option>
+            <option>BODY</option><option>ASSE-1</option><option>ASSE-2</option>
+            <option>FLAP</option><option>BACK</option><option>POST ASSEMBLY</option>
+          </select>
+          <button id="workerReload" class="btn">Reload</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th><th>Token</th><th>Department</th><th>Line</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="workersBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
 
-<!-- REPORTS -->
-<section id="reports" class="section">
-<div class="page-header">
-<h1>Reports & Analytics</h1>
-<a class="btn-primary" href="/api/reports/earnings.csv">📥 Export Earnings CSV</a>
-</div>
-<div class="charts-grid">
-<div class="chart-card">
-<div class="chart-header"><h3>Worker Productivity (mock)</h3></div>
-<div class="chart-container"><canvas id="productivityChart"></canvas></div>
-</div>
-<div class="chart-card">
-<div class="chart-header"><h3>Earnings Summary (by Dept)</h3></div>
-<div id="earningsSummary"></div>
-</div>
-</div>
-</section>
-</main>
-</div>
+    <!-- Bundles -->
+    <section id="bundles" class="space-y-4">
+      <h2 class="section-title">Bundles</h2>
+      <div class="card">
+        <div class="overflow-x-auto">
+          <table class="table">
+            <thead>
+              <tr><th>Bundle</th><th>Qty</th><th>Status</th></tr>
+            </thead>
+            <tbody id="bundlesBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
 
+    <!-- Uploads -->
+    <section id="uploads" class="space-y-4">
+      <h2 class="section-title">File Upload</h2>
+      <div class="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <div class="card space-y-3">
+          <div class="card-title">Upload OB File (Excel)</div>
+          <form id="formOB" class="space-y-3">
+            <input type="file" id="obFile" accept=".xlsx,.xls" class="file-input" />
+            <button class="btn" type="submit">Upload</button>
+          </form>
+          <p id="obMsg" class="muted"></p>
+        </div>
 
-<script src="/static/js/pms.js"></script>
+        <div class="card space-y-3">
+          <div class="card-title">Upload Production Order (PDF)</div>
+          <form id="formPO" class="space-y-3">
+            <input type="file" id="poFile" accept="application/pdf" class="file-input" />
+            <button class="btn" type="submit">Upload</button>
+          </form>
+          <p id="poMsg" class="muted"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Scanner -->
+    <section id="scanner" class="space-y-4">
+      <h2 class="section-title">ESP32 Scanner Demo</h2>
+      <div class="card space-y-3">
+        <div class="flex flex-wrap gap-3 items-center">
+          <input id="scanToken" class="input" placeholder="Enter token id (e.g. 1001)" />
+          <select id="scanType" class="input">
+            <option value="work">Work</option>
+            <option value="login">Login</option>
+            <option value="logout">Logout</option>
+          </select>
+          <button id="scanBtn" class="btn">Simulate</button>
+        </div>
+        <div id="scanLog" class="text-sm whitespace-pre-wrap bg-slate-50 border border-slate-200 rounded p-3 min-h-[3rem]"></div>
+      </div>
+    </section>
+
+    <!-- Reports -->
+    <section id="reports" class="space-y-4">
+      <h2 class="section-title">Reports &amp; Analytics</h2>
+      <div class="card flex items-center justify-between">
+        <div>
+          <div class="font-medium">Earnings Summary CSV</div>
+          <div class="muted">Download mock earnings by department</div>
+        </div>
+        <a class="btn" href="/api/reports/earnings.csv">Export CSV</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="py-10 text-center text-xs text-slate-500">© Factory Ops Demo</footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

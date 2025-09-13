@@ -1,7 +1,8 @@
 import os
 import csv
 import random
-from datetime import datetime, timezone, timedelta
+import threading
+from datetime import datetime, timezone
 
 from flask import (
     Flask, render_template, request, jsonify, send_from_directory, Response
@@ -17,7 +18,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")  # e.g. Render Postgres connection URL
 DEVICE_SECRET = os.getenv("DEVICE_SECRET", "my-esp32-secret")
 RATE_PER_PIECE = float(os.getenv("RATE_PER_PIECE", "5.0"))
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", template_folder="templates")
 
 # -------------------------
 # DB helpers
@@ -31,6 +32,7 @@ def get_conn():
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
+
     # workers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS workers (
@@ -44,6 +46,7 @@ def init_db():
             last_logout TIMESTAMP
         )
     """)
+
     # operations
     cur.execute("""
         CREATE TABLE IF NOT EXISTS operations (
@@ -57,6 +60,7 @@ def init_db():
             rate NUMERIC
         )
     """)
+
     # bundles
     cur.execute("""
         CREATE TABLE IF NOT EXISTS bundles (
@@ -66,6 +70,7 @@ def init_db():
             status TEXT
         )
     """)
+
     # scan logs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scan_logs (
@@ -75,6 +80,7 @@ def init_db():
             scanned_at TIMESTAMP DEFAULT NOW()
         )
     """)
+
     # activities (for recent activity feed)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activities (
@@ -148,9 +154,33 @@ def init_db():
     conn.close()
 
 
-@app.before_first_request
-def _bootstrap():
-    init_db()
+# -------------------------
+# Safe one-time init (works on Flask 3.x)
+# -------------------------
+_initialized = False
+_init_lock = threading.Lock()
+
+@app.before_request
+def _ensure_initialized():
+    global _initialized
+    if not _initialized:
+        with _init_lock:
+            if not _initialized:
+                try:
+                    init_db()
+                    _initialized = True
+                except Exception as e:
+                    # Don't crash the worker; log and continue so health checks still pass
+                    app.logger.exception("Database initialization failed: %s", e)
+
+
+# -------------------------
+# Health
+# -------------------------
+@app.route("/health")
+def health():
+    return "ok", 200
+
 
 # -------------------------
 # Routes (UI)
@@ -165,6 +195,7 @@ def index():
 def favicon():
     return send_from_directory(os.path.join(app.root_path, "static"), "favicon.ico", mimetype="image/vnd.microsoft.icon")
 
+
 # -------------------------
 # API: Dashboard & Data
 # -------------------------
@@ -172,6 +203,7 @@ def favicon():
 def api_stats():
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("SELECT COUNT(*) FROM workers WHERE is_logged_in=TRUE")
     active_workers = cur.fetchone()[0]
 
@@ -214,8 +246,8 @@ def api_activities():
     def fmt_time(ts):
         if not ts:
             return "now"
-        # return relative-ish string for the UI
-        delta = datetime.now(timezone.utc) - (ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts)
+        dt = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
         mins = int(delta.total_seconds() // 60)
         return f"{mins} min ago" if mins < 60 else f"{mins//60} hr ago"
 
@@ -231,7 +263,6 @@ def api_activities():
 
 @app.route("/api/chart-data")
 def api_chart_data():
-    # simple monthly dataset based on scans to keep the chart non-empty
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -244,9 +275,8 @@ def api_chart_data():
     rows = cur.fetchall()
     conn.close()
 
-    # Build 12 months labels
     labels_all = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    values_map = { (r[0].month if r[0] else 1): r[1] for r in rows }
+    values_map = {(r[0].month if r[0] else 1): r[1] for r in rows}
     values = [int(values_map.get(i, random.randint(250, 950))) for i in range(1, 13)]
 
     return jsonify({"labels": labels_all, "values": values})
@@ -329,9 +359,7 @@ def api_assign_bundle():
 
     conn = get_conn()
     cur = conn.cursor()
-    # move bundle to In Progress
     cur.execute("UPDATE bundles SET status='In Progress' WHERE bundle_code=%s", (bundle_id,))
-    # log activity
     cur.execute("""
         INSERT INTO activities (actor, department, action)
         VALUES (%s, %s, %s)
@@ -379,20 +407,15 @@ def api_report_earnings():
     # Department earnings CSV (fake data for demo)
     departments = ["SLEEVE","COLLAR","LINING","BODY","ASSE-1","ASSE-2","FLAP","BACK"]
     def generate():
-        output = [["Department","Earnings"]]
-        output += [[d, random.randint(20000, 50000)] for d in departments]
-        buf = []
-        w = csv.writer(buf := [])
-        # Build CSV in memory
-        sio = ""
         yield "Department,Earnings\n"
-        for d, v in output[1:]:
-            yield f"{d},{v}\n"
-    return Response(generate(), mimetype="text/csv")
+        for d in departments:
+            yield f"{d},{random.randint(20000, 50000)}\n"
+    headers = {"Content-Disposition": "attachment; filename=earnings.csv"}
+    return Response(generate(), mimetype="text/csv", headers=headers)
 
 
 # -------------------------
-# ESP32 Scan Endpoint (FIXED INDENTATION)
+# ESP32 Scan Endpoint
 # -------------------------
 @app.route("/scan", methods=["POST"])
 def scan():

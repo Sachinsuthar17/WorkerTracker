@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+</div>
+</section>
+
+
+<!-- FILE UPLOAD -->
+<section id="file-upload" class="section">
+<div class="page-header"><h1>File Upload</h1></div>
+<div class="reports-grid">
+<div class="report-card">
+<div class="report-icon">📄</div>
+<h3>Upload OB File (Excel)</h3>
+<input type="file" id="obFileInput" accept=".xlsx,.xls" />
+<button class="btn-secondary" id="uploadObBtn">Upload</button>
+<p id="obUploadStatus" class="text-muted"></p>
+</div>
+<div class="report-card">
+<div class="report-icon">📋</div>
+<h3>Upload Production Order (PDF)</h3>
+<input type="file" id="poFileInput" accept=".pdf" />
+<button class="btn-secondary" id="uploadPoBtn">Upload</button>
+<p id="poUploadStatus" class="text-muted"></p>
+</div>
+</div>
+</section>
+
+
+<!-- ESP32 DEMO -->
+<section id="esp32-demo" class="section">
+<div class="page-header"><h1>ESP32 Scanner Demo</h1></div>
+<div class="reports-grid">
+<div class="report-card">
+<h3>Simulate Scan</h3>
+<input type="text" id="simulateToken" class="form-input" placeholder="Enter token id" />
+<select id="simulateType" class="form-input">
+<option value="work">Work</option>
+<option value="login">Login</option>
+<option value="logout">Logout</option>
+</select>
+<button class="btn-primary" id="simulateScanBtn">Simulate</button>
+<div id="scanResult" class="text-muted" style="margin-top: .75rem;"></div>
+</div>
+<div class="report-card">
+<h3>Scan Log</h3>
+<div id="scanLog"></div>
+</div>
+</div>
+</section>
+
+
+<!-- REPORTS -->
+<section id="reports" class="section">
+<div class="page-header">
+<h1>Reports & Analytics</h1>
+<a class="btn-primary" href="/api/reports/earnings.csv">📥 Export Earnings CSV</a>
+</div>
+<div class="charts-grid">
+<div class="chart-card">
+<div class="chart-header"><h3>Worker Productivity (mock)</h3></div>
+<div class="chart-container"><canvas id="productivityChart"></canvas></div>
+</div>
+<div class="chart-card">
+<div class="chart-header"><h3>Earnings Summary (by Dept)</h3></div>
+<div id="earningsSummary"></div>
+</div>
+</div>
+</section>
+</main>
+</div>
+
+
+<script src="/static/js/pms.js"></script>
+</body>
+</html>

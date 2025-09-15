@@ -1,11 +1,11 @@
 import os
 import logging
 from datetime import datetime
-from collections import Counter
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from sqlalchemy import text, inspect
 
 # ------------------------------------------------------------------------------
 # Flask setup
@@ -23,11 +23,9 @@ log = app.logger
 # Database URL (force psycopg v3 driver)
 # ------------------------------------------------------------------------------
 raw_url = os.getenv("DATABASE_URL", "")
-# Render often gives postgres://; SQLAlchemy + psycopg wants postgresql+psycopg://
 db_url = raw_url.replace("postgres://", "postgresql+psycopg://")
 if db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
-
 if not db_url:
     db_url = "sqlite:///local.db"  # local dev fallback
 
@@ -50,7 +48,8 @@ class Worker(db.Model):
     department = db.Column(db.String(80))
     line = db.Column(db.String(40))
     status = db.Column(db.String(40), default="Active")
-    qrcode = db.Column(db.String(255))  # URL/value
+    # This column may be missing in an existing DB — we add it in auto_migrate()
+    qrcode = db.Column(db.String(255))
 
 
 class Operation(db.Model):
@@ -71,7 +70,7 @@ class Bundle(db.Model):
     bundle_code = db.Column(db.String(32), unique=True, nullable=False)
     qty = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(40), nullable=False, default="pending")
-    # Keep nullable=True so older rows/seeds don't fail
+    # This column might be missing; we add it in auto_migrate()
     barcode_value = db.Column(db.String(120))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -82,18 +81,57 @@ class Activity(db.Model):
     message = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# ------------------------------------------------------------------------------
+# Auto-migrate missing columns (idempotent)
+# ------------------------------------------------------------------------------
+def auto_migrate():
+    """Create tables if needed and add any missing columns safely."""
+    db.create_all()
+    eng = db.engine
+    dialect = eng.dialect.name
+    insp = inspect(eng)
+
+    def has_col(table, col):
+        try:
+            return col in [c["name"] for c in insp.get_columns(table)]
+        except Exception:
+            return False
+
+    with eng.begin() as conn:
+        # workers.qrcode
+        if not has_col("workers", "qrcode"):
+            if dialect == "postgresql":
+                conn.execute(text('ALTER TABLE workers ADD COLUMN IF NOT EXISTS qrcode TEXT;'))
+            elif dialect == "sqlite":
+                # SQLite lacks IF NOT EXISTS for ADD COLUMN before 3.35.5; safe to run simple add.
+                conn.execute(text('ALTER TABLE workers ADD COLUMN qrcode TEXT'))
+            log.info("Auto-migrated: added workers.qrcode")
+
+        # bundles.barcode_value
+        if not has_col("bundles", "barcode_value"):
+            if dialect == "postgresql":
+                conn.execute(text('ALTER TABLE bundles ADD COLUMN IF NOT EXISTS barcode_value TEXT;'))
+            elif dialect == "sqlite":
+                conn.execute(text('ALTER TABLE bundles ADD COLUMN barcode_value TEXT'))
+            log.info("Auto-migrated: added bundles.barcode_value")
+
+        # bundles.created_at
+        if not has_col("bundles", "created_at"):
+            if dialect == "postgresql":
+                conn.execute(text('ALTER TABLE bundles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();'))
+            elif dialect == "sqlite":
+                conn.execute(text('ALTER TABLE bundles ADD COLUMN created_at TIMESTAMP'))
+            log.info("Auto-migrated: added bundles.created_at")
 
 # ------------------------------------------------------------------------------
-# Bootstrap (create tables + seed once)
+# Seed once (only when empty)
 # ------------------------------------------------------------------------------
 def seed_once():
-    db.create_all()
-
     if Worker.query.count() == 0:
         db.session.add_all([
-            Worker(name="Arun K",  token_id="W001", department="Cutting",    line="L1", status="Active"),
-            Worker(name="Priya S", token_id="W002", department="Stitching",  line="L2", status="Idle"),
-            Worker(name="Rahul M", token_id="W003", department="Finishing",  line="L3", status="Active"),
+            Worker(name="Arun K",  token_id="W001", department="Cutting",    line="L1", status="Active", qrcode="W001"),
+            Worker(name="Priya S", token_id="W002", department="Stitching",  line="L2", status="Idle",   qrcode="W002"),
+            Worker(name="Rahul M", token_id="W003", department="Finishing",  line="L3", status="Active", qrcode="W003"),
         ])
 
     if Operation.query.count() == 0:
@@ -124,12 +162,12 @@ def seed_once():
         Worker.query.count(), Operation.query.count(), Bundle.query.count()
     )
 
-
 with app.app_context():
+    auto_migrate()
     seed_once()
 
 # ------------------------------------------------------------------------------
-# Serve HTML (with fallbacks if you kept files at repo root)
+# Static/HTML serving with fallbacks
 # ------------------------------------------------------------------------------
 def _exists(path: str) -> bool:
     try:
@@ -139,6 +177,7 @@ def _exists(path: str) -> bool:
 
 @app.get("/")
 def home():
+    # Prefer /templates/index.html, else fall back to repo root index.html
     if _exists(os.path.join(app.template_folder, "index.html")):
         return render_template("index.html")
     if _exists("index.html"):
@@ -170,6 +209,8 @@ def favicon():
 # ------------------------------------------------------------------------------
 # APIs
 # ------------------------------------------------------------------------------
+from collections import Counter
+
 @app.get("/api/stats")
 def api_stats():
     workers = Worker.query.count()
@@ -198,7 +239,7 @@ def api_bundles():
             "qty": r.qty,
             "status": r.status,
             "barcode_value": r.barcode_value,
-            "created_at": r.created_at.isoformat() + "Z",
+            "created_at": r.created_at.isoformat() + "Z" if r.created_at else None,
         } for r in rows
     ])
 

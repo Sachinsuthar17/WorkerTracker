@@ -3,19 +3,19 @@ import logging
 from datetime import datetime
 from collections import Counter
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
-# --------------------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Flask setup
+# ------------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# DATABASE_URL provided by Render Postgres automatically (looks like: postgres://...)
-DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://")
+# Render sets DATABASE_URL like "postgres://..."; SQLAlchemy wants "postgresql://..."
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").replace("postgres://", "postgresql://")
 if not DATABASE_URL:
-    # Local dev fallback (SQLite)
+    # Local dev fallback (SQLite). Render production should set DATABASE_URL.
     DATABASE_URL = "sqlite:///local.db"
 
 app.config.update(
@@ -24,10 +24,9 @@ app.config.update(
     JSON_SORT_KEYS=False,
 )
 
-# Security & CORS
+# CORS for your /api/* endpoints (front-end calls)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# Logging
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(levelname)s:%(name)s:%(message)s",
@@ -36,10 +35,9 @@ log = app.logger
 
 db = SQLAlchemy(app)
 
-
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Models
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 class Worker(db.Model):
     __tablename__ = "workers"
     id = db.Column(db.Integer, primary_key=True)
@@ -48,7 +46,7 @@ class Worker(db.Model):
     department = db.Column(db.String(80), nullable=True)
     line = db.Column(db.String(40), nullable=True)
     status = db.Column(db.String(40), default="Active")
-    qrcode = db.Column(db.String(255), nullable=True)  # URL / value
+    qrcode = db.Column(db.String(255), nullable=True)  # URL/value
 
 
 class Operation(db.Model):
@@ -69,7 +67,7 @@ class Bundle(db.Model):
     bundle_code = db.Column(db.String(32), unique=True, nullable=False)
     qty = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(40), nullable=False, default="pending")
-    # keep this nullable=True to avoid NotNullViolation during seeds/legacy rows
+    # keep nullable=True so legacy seeds/rows don't fail with NOT NULL
     barcode_value = db.Column(db.String(120), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -81,94 +79,127 @@ class Activity(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
-# --------------------------------------------------------------------------------------
-# Bootstrap (create tables + seed data once)
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# One-time bootstrap (create tables + seed only if empty)
+# ------------------------------------------------------------------------------
 def seed_once():
-    """Create tables and insert small seed only if DB is empty."""
     db.create_all()
 
-    # Workers
     if Worker.query.count() == 0:
-        workers = [
-            Worker(name="Arun K", token_id="W001", department="Cutting", line="L1", status="Active"),
-            Worker(name="Priya S", token_id="W002", department="Stitching", line="L2", status="Idle"),
-            Worker(name="Rahul M", token_id="W003", department="Finishing", line="L3", status="Active"),
-        ]
-        db.session.add_all(workers)
+        db.session.add_all([
+            Worker(name="Arun K",  token_id="W001", department="Cutting",    line="L1", status="Active"),
+            Worker(name="Priya S", token_id="W002", department="Stitching",  line="L2", status="Idle"),
+            Worker(name="Rahul M", token_id="W003", department="Finishing",  line="L3", status="Active"),
+        ])
 
-    # Operations
     if Operation.query.count() == 0:
-        ops = [
-            Operation(seq_no=10, op_no="OP-101", description="Front stitch", machine="SNLS", department="Stitching", std_min=1.2, piece_rate=2.5),
-            Operation(seq_no=20, op_no="OP-205", description="Sleeve attach", machine="OL", department="Stitching", std_min=1.8, piece_rate=3.0),
-            Operation(seq_no=30, op_no="OP-310", description="Quality check", machine="-", department="QC", std_min=0.9, piece_rate=1.0),
-        ]
-        db.session.add_all(ops)
+        db.session.add_all([
+            Operation(seq_no=10, op_no="OP-101", description="Front stitch",   machine="SNLS", department="Stitching", std_min=1.2, piece_rate=2.5),
+            Operation(seq_no=20, op_no="OP-205", description="Sleeve attach",  machine="OL",   department="Stitching", std_min=1.8, piece_rate=3.0),
+            Operation(seq_no=30, op_no="OP-310", description="Quality check",  machine="-",    department="QC",        std_min=0.9, piece_rate=1.0),
+        ])
 
-    # Bundles
     if Bundle.query.count() == 0:
-        bundles = [
-            Bundle(bundle_code="A12", qty=120, status="pending", barcode_value="A12-0001"),
-            Bundle(bundle_code="B05", qty=80, status="in_progress", barcode_value="B05-0001"),
-            Bundle(bundle_code="C77", qty=60, status="completed", barcode_value="C77-0001"),
-            Bundle(bundle_code="D15", qty=40, status="pending", barcode_value="D15-0001"),
-        ]
-        db.session.add_all(bundles)
+        db.session.add_all([
+            Bundle(bundle_code="A12", qty=120, status="pending",     barcode_value="A12-0001"),
+            Bundle(bundle_code="B05", qty=80,  status="in_progress", barcode_value="B05-0001"),
+            Bundle(bundle_code="C77", qty=60,  status="completed",   barcode_value="C77-0001"),
+            Bundle(bundle_code="D15", qty=40,  status="pending",     barcode_value="D15-0001"),
+        ])
 
-    # Activities
     if Activity.query.count() == 0:
-        acts = [
+        db.session.add_all([
             Activity(message="System initialized"),
             Activity(message="Bundles seeded"),
             Activity(message="Workers imported"),
-        ]
-        db.session.add_all(acts)
+        ])
 
     db.session.commit()
-    log.info("DB ready. Workers=%s, Operations=%s, Bundles=%s",
-             Worker.query.count(), Operation.query.count(), Bundle.query.count())
+    log.info(
+        "DB ready. Workers=%s, Operations=%s, Bundles=%s",
+        Worker.query.count(), Operation.query.count(), Bundle.query.count()
+    )
 
 
 with app.app_context():
     seed_once()
 
+# ------------------------------------------------------------------------------
+# HTML views (with safe fallbacks if files are not under /templates or /static)
+# ------------------------------------------------------------------------------
+def _exists(path: str) -> bool:
+    try:
+        return os.path.exists(path)
+    except Exception:
+        return False
 
-# --------------------------------------------------------------------------------------
-# Views (HTML)
-# --------------------------------------------------------------------------------------
 @app.get("/")
 def home():
-    return render_template("index.html")
+    """
+    Preferred: put files here:
+      templates/index.html
+      static/style.css
+      static/app.js
+    Fallback: serve root-level index.html/style.css/app.js if that's how you committed them.
+    """
+    if _exists(os.path.join(app.template_folder, "index.html")):
+        return render_template("index.html")
 
+    # fallback to project root index.html (Render build logs showed users often keep it at /)
+    if _exists("index.html"):
+        return send_from_directory(".", "index.html")
 
-# --------------------------------------------------------------------------------------
-# APIs
-# --------------------------------------------------------------------------------------
+    # nothing found
+    return abort(404, description="index.html not found. Place it in /templates or project root.")
+
+# Root-level static fallbacks (only used if you didn't move files into /static)
+@app.get("/style.css")
+def style_root():
+    if _exists(os.path.join(app.static_folder, "style.css")):
+        return send_from_directory(app.static_folder, "style.css")
+    if _exists("style.css"):
+        return send_from_directory(".", "style.css")
+    return abort(404)
+
+@app.get("/app.js")
+def appjs_root():
+    if _exists(os.path.join(app.static_folder, "app.js")):
+        return send_from_directory(app.static_folder, "app.js")
+    if _exists("app.js"):
+        return send_from_directory(".", "app.js")
+    return abort(404)
+
+@app.get("/favicon.ico")
+def favicon():
+    # optional, won't error if missing
+    if _exists(os.path.join(app.static_folder, "favicon.ico")):
+        return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
+    return abort(404)
+
+# ------------------------------------------------------------------------------
+# APIs used by your front-end
+# ------------------------------------------------------------------------------
 @app.get("/api/stats")
 def api_stats():
     workers = Worker.query.count()
     bundles = Bundle.query.count()
     ops = Operation.query.count()
-    earnings = round(sum(o.piece_rate * (o.std_min or 0) for o in Operation.query), 2)
+    earnings = round(sum((o.piece_rate or 0) * (o.std_min or 0) for o in Operation.query.all()), 2)
 
     return jsonify({
-        "active_workers": workers,         # Simplified: count all as active for KPI
+        "active_workers": workers,  # simplified KPI
         "total_bundles": bundles,
         "total_operations": ops,
         "total_earnings": earnings,
-        "last_updated": datetime.utcnow().isoformat() + "Z"
+        "last_updated": datetime.utcnow().isoformat() + "Z",
     })
-
 
 @app.get("/api/activities")
 def api_activities():
     rows = Activity.query.order_by(Activity.created_at.desc()).limit(20).all()
     return jsonify([
-        {"message": r.message, "created_at": r.created_at.isoformat() + "Z"}
-        for r in rows
+        {"message": r.message, "created_at": r.created_at.isoformat() + "Z"} for r in rows
     ])
-
 
 @app.get("/api/bundles")
 def api_bundles():
@@ -179,10 +210,9 @@ def api_bundles():
             "qty": r.qty,
             "status": r.status,
             "barcode_value": r.barcode_value,
-            "created_at": r.created_at.isoformat() + "Z"
+            "created_at": r.created_at.isoformat() + "Z",
         } for r in rows
     ])
-
 
 @app.get("/api/workers")
 def api_workers():
@@ -210,18 +240,20 @@ def api_workers():
         } for r in rows
     ])
 
-
 @app.get("/api/operations")
 def api_operations():
     rows = Operation.query.order_by(Operation.seq_no.asc()).all()
     return jsonify([
         {
-            "seq_no": r.seq_no, "op_no": r.op_no, "description": r.description,
-            "machine": r.machine, "department": r.department,
-            "std_min": r.std_min, "piece_rate": r.piece_rate
+            "seq_no": r.seq_no,
+            "op_no": r.op_no,
+            "description": r.description,
+            "machine": r.machine,
+            "department": r.department,
+            "std_min": r.std_min,
+            "piece_rate": r.piece_rate,
         } for r in rows
     ])
-
 
 @app.get("/api/chart-data")
 def api_chart_data():
@@ -242,49 +274,37 @@ def api_chart_data():
         "departmentWorkload": {"labels": dept_labels, "values": dept_values},
     })
 
-
 @app.post("/api/scan")
 def api_scan():
     """
-    Accepts JSON: { "barcode": "A12-0001" }
-    Finds bundle by prefix (bundle_code) and moves to 'in_progress', logs activity.
+    JSON: { "barcode": "A12-0001" }
+    We treat part before '-' as bundle_code ("A12"), update status and log an activity.
     """
     data = request.get_json(silent=True) or {}
-    barcode = data.get("barcode", "").strip()
+    barcode = (data.get("barcode") or "").strip()
     if not barcode:
         return jsonify({"error": "barcode is required"}), 400
 
-    # Simple: bundle_code is part before first dash, e.g., "A12-0001" -> "A12"
     code = barcode.split("-")[0]
     bundle = Bundle.query.filter_by(bundle_code=code).first()
     if not bundle:
         return jsonify({"error": f"bundle not found for code '{code}'"}), 404
 
-    # Update
     prev = bundle.status
     bundle.status = "in_progress" if prev == "pending" else "completed"
     bundle.barcode_value = barcode
+
     db.session.add(Activity(message=f"Scan {barcode}: {prev} → {bundle.status}"))
     db.session.commit()
 
     return jsonify({"ok": True, "bundle_code": bundle.bundle_code, "status": bundle.status})
 
-
-# Healthcheck for Render
 @app.get("/healthz")
 def healthz():
     return jsonify({"ok": True})
 
-
-# Serve favicon if needed
-@app.get("/favicon.ico")
-def favicon():
-    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
-
-
-# --------------------------------------------------------------------------------------
-# Gunicorn entry
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Local dev entrypoint
+# ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Local dev
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)

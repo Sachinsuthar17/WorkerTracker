@@ -1,4 +1,4 @@
-# Web & server
+# Web
 Flask==3.0.3
 gunicorn==22.0.0
 Flask-Cors==4.0.1
@@ -7,8 +7,8 @@ Flask-Cors==4.0.1
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.32
 
-# Postgres driver compatible with Python 3.13 on Render
-psycopg[binary]==3.1.20
+# Postgres driver (works on Python 3.13; binary wheels available)
+psycopg[binary]==3.2.10
 
-# Env helper (optional)
+# Optional env loader
 python-dotenv==1.0.1

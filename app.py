@@ -11,20 +11,6 @@ from flask_cors import CORS
 # Flask setup
 # ------------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
-
-# Render sets DATABASE_URL like "postgres://..."; SQLAlchemy wants "postgresql://..."
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").replace("postgres://", "postgresql://")
-if not DATABASE_URL:
-    # Local dev fallback (SQLite). Render production should set DATABASE_URL.
-    DATABASE_URL = "sqlite:///local.db"
-
-app.config.update(
-    SQLALCHEMY_DATABASE_URI=DATABASE_URL,
-    SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    JSON_SORT_KEYS=False,
-)
-
-# CORS for your /api/* endpoints (front-end calls)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 logging.basicConfig(
@@ -32,6 +18,24 @@ logging.basicConfig(
     format="%(levelname)s:%(name)s:%(message)s",
 )
 log = app.logger
+
+# ------------------------------------------------------------------------------
+# Database URL (force psycopg v3 driver)
+# ------------------------------------------------------------------------------
+raw_url = os.getenv("DATABASE_URL", "")
+# Render often gives postgres://; SQLAlchemy + psycopg wants postgresql+psycopg://
+db_url = raw_url.replace("postgres://", "postgresql+psycopg://")
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+if not db_url:
+    db_url = "sqlite:///local.db"  # local dev fallback
+
+app.config.update(
+    SQLALCHEMY_DATABASE_URI=db_url,
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    JSON_SORT_KEYS=False,
+)
 
 db = SQLAlchemy(app)
 
@@ -43,10 +47,10 @@ class Worker(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     token_id = db.Column(db.String(64), unique=True, nullable=False)
-    department = db.Column(db.String(80), nullable=True)
-    line = db.Column(db.String(40), nullable=True)
+    department = db.Column(db.String(80))
+    line = db.Column(db.String(40))
     status = db.Column(db.String(40), default="Active")
-    qrcode = db.Column(db.String(255), nullable=True)  # URL/value
+    qrcode = db.Column(db.String(255))  # URL/value
 
 
 class Operation(db.Model):
@@ -55,8 +59,8 @@ class Operation(db.Model):
     seq_no = db.Column(db.Integer, nullable=False)
     op_no = db.Column(db.String(40), nullable=False)
     description = db.Column(db.String(255), nullable=False)
-    machine = db.Column(db.String(80), nullable=True)
-    department = db.Column(db.String(80), nullable=True)
+    machine = db.Column(db.String(80))
+    department = db.Column(db.String(80))
     std_min = db.Column(db.Float, default=0.0)
     piece_rate = db.Column(db.Float, default=0.0)
 
@@ -67,8 +71,8 @@ class Bundle(db.Model):
     bundle_code = db.Column(db.String(32), unique=True, nullable=False)
     qty = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(40), nullable=False, default="pending")
-    # keep nullable=True so legacy seeds/rows don't fail with NOT NULL
-    barcode_value = db.Column(db.String(120), nullable=True)
+    # Keep nullable=True so older rows/seeds don't fail
+    barcode_value = db.Column(db.String(120))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -80,7 +84,7 @@ class Activity(db.Model):
 
 
 # ------------------------------------------------------------------------------
-# One-time bootstrap (create tables + seed only if empty)
+# Bootstrap (create tables + seed once)
 # ------------------------------------------------------------------------------
 def seed_once():
     db.create_all()
@@ -125,7 +129,7 @@ with app.app_context():
     seed_once()
 
 # ------------------------------------------------------------------------------
-# HTML views (with safe fallbacks if files are not under /templates or /static)
+# Serve HTML (with fallbacks if you kept files at repo root)
 # ------------------------------------------------------------------------------
 def _exists(path: str) -> bool:
     try:
@@ -135,24 +139,12 @@ def _exists(path: str) -> bool:
 
 @app.get("/")
 def home():
-    """
-    Preferred: put files here:
-      templates/index.html
-      static/style.css
-      static/app.js
-    Fallback: serve root-level index.html/style.css/app.js if that's how you committed them.
-    """
     if _exists(os.path.join(app.template_folder, "index.html")):
         return render_template("index.html")
-
-    # fallback to project root index.html (Render build logs showed users often keep it at /)
     if _exists("index.html"):
         return send_from_directory(".", "index.html")
+    return abort(404, description="index.html not found. Put it in /templates or project root.")
 
-    # nothing found
-    return abort(404, description="index.html not found. Place it in /templates or project root.")
-
-# Root-level static fallbacks (only used if you didn't move files into /static)
 @app.get("/style.css")
 def style_root():
     if _exists(os.path.join(app.static_folder, "style.css")):
@@ -171,13 +163,12 @@ def appjs_root():
 
 @app.get("/favicon.ico")
 def favicon():
-    # optional, won't error if missing
     if _exists(os.path.join(app.static_folder, "favicon.ico")):
         return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
     return abort(404)
 
 # ------------------------------------------------------------------------------
-# APIs used by your front-end
+# APIs
 # ------------------------------------------------------------------------------
 @app.get("/api/stats")
 def api_stats():
@@ -185,9 +176,8 @@ def api_stats():
     bundles = Bundle.query.count()
     ops = Operation.query.count()
     earnings = round(sum((o.piece_rate or 0) * (o.std_min or 0) for o in Operation.query.all()), 2)
-
     return jsonify({
-        "active_workers": workers,  # simplified KPI
+        "active_workers": workers,
         "total_bundles": bundles,
         "total_operations": ops,
         "total_earnings": earnings,
@@ -197,9 +187,7 @@ def api_stats():
 @app.get("/api/activities")
 def api_activities():
     rows = Activity.query.order_by(Activity.created_at.desc()).limit(20).all()
-    return jsonify([
-        {"message": r.message, "created_at": r.created_at.isoformat() + "Z"} for r in rows
-    ])
+    return jsonify([{"message": r.message, "created_at": r.created_at.isoformat() + "Z"} for r in rows])
 
 @app.get("/api/bundles")
 def api_bundles():
@@ -217,7 +205,6 @@ def api_bundles():
 @app.get("/api/workers")
 def api_workers():
     q = Worker.query
-    # optional filters
     dept = request.args.get("department")
     status = request.args.get("status")
     search = request.args.get("q")
@@ -257,13 +244,11 @@ def api_operations():
 
 @app.get("/api/chart-data")
 def api_chart_data():
-    # Bundle status distribution
     statuses = [b.status for b in Bundle.query.all()]
     status_counts = Counter(statuses)
     status_labels = list(status_counts.keys())
     status_values = [status_counts[k] for k in status_labels]
 
-    # Department workload = count operations by department
     depts = [o.department or "Unknown" for o in Operation.query.all()]
     dept_counts = Counter(depts)
     dept_labels = list(dept_counts.keys())
@@ -276,10 +261,6 @@ def api_chart_data():
 
 @app.post("/api/scan")
 def api_scan():
-    """
-    JSON: { "barcode": "A12-0001" }
-    We treat part before '-' as bundle_code ("A12"), update status and log an activity.
-    """
     data = request.get_json(silent=True) or {}
     barcode = (data.get("barcode") or "").strip()
     if not barcode:
@@ -296,7 +277,6 @@ def api_scan():
 
     db.session.add(Activity(message=f"Scan {barcode}: {prev} → {bundle.status}"))
     db.session.commit()
-
     return jsonify({"ok": True, "bundle_code": bundle.bundle_code, "status": bundle.status})
 
 @app.get("/healthz")
@@ -304,7 +284,7 @@ def healthz():
     return jsonify({"ok": True})
 
 # ------------------------------------------------------------------------------
-# Local dev entrypoint
+# Local dev
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)

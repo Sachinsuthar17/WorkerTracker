@@ -1,313 +1,290 @@
 import os
-import csv
-import io
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
+from collections import Counter
 
-from flask import Flask, jsonify, send_from_directory, Response, request, abort
+from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-import psycopg2
-import psycopg2.extras
 
-# -----------------------------------------------------------------------------
-# Flask setup
-# -----------------------------------------------------------------------------
-APP_DIR = Path(__file__).resolve().parent
+# --------------------------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------------------------
+app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# Candidate locations to look for index.html + assets on Render
-CANDIDATE_UI_DIRS = [
-    APP_DIR,
-    APP_DIR / "static",
-    APP_DIR / "public",
-    APP_DIR / "frontend",
-    APP_DIR / "templates",
-]
+# DATABASE_URL provided by Render Postgres automatically (looks like: postgres://...)
+DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://")
+if not DATABASE_URL:
+    # Local dev fallback (SQLite)
+    DATABASE_URL = "sqlite:///local.db"
 
-def find_ui_dir() -> Path | None:
-    for d in CANDIDATE_UI_DIRS:
-        if (d / "index.html").exists():
-            return d
-    return None
+app.config.update(
+    SQLALCHEMY_DATABASE_URI=DATABASE_URL,
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    JSON_SORT_KEYS=False,
+)
 
-UI_DIR = find_ui_dir()
+# Security & CORS
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-app = Flask(__name__)  # no static_folder; we serve dynamically
-CORS(app)
-logging.basicConfig(level=logging.INFO)
+# Logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(levelname)s:%(name)s:%(message)s",
+)
 log = app.logger
 
-def _log_static_presence():
-    log.info("Working dir: %s", APP_DIR)
-    present = []
-    for f in ("index.html", "style.css", "app.js"):
-        found = any((d / f).exists() for d in CANDIDATE_UI_DIRS)
-        present.append(f"{f}:{'Y' if found else 'N'}")
-    log.info("Static search (%s): %s",
-             ", ".join([str(p) for p in CANDIDATE_UI_DIRS]),
-             ", ".join(present))
-    if UI_DIR:
-        log.info("Using UI dir: %s", UI_DIR)
-    else:
-        log.warning("No UI dir found (index.html missing in all candidates).")
+db = SQLAlchemy(app)
 
-_log_static_presence()
 
-# -----------------------------------------------------------------------------
-# Database
-# -----------------------------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
+# --------------------------------------------------------------------------------------
+# Models
+# --------------------------------------------------------------------------------------
+class Worker(db.Model):
+    __tablename__ = "workers"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    token_id = db.Column(db.String(64), unique=True, nullable=False)
+    department = db.Column(db.String(80), nullable=True)
+    line = db.Column(db.String(40), nullable=True)
+    status = db.Column(db.String(40), default="Active")
+    qrcode = db.Column(db.String(255), nullable=True)  # URL / value
 
-def get_conn():
-    if not DATABASE_URL:
-        return None
-    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
-def ensure_db():
-    if not DATABASE_URL:
-        log.warning("DATABASE_URL not set; API will return mock data only.")
-        return
+class Operation(db.Model):
+    __tablename__ = "operations"
+    id = db.Column(db.Integer, primary_key=True)
+    seq_no = db.Column(db.Integer, nullable=False)
+    op_no = db.Column(db.String(40), nullable=False)
+    description = db.Column(db.String(255), nullable=False)
+    machine = db.Column(db.String(80), nullable=True)
+    department = db.Column(db.String(80), nullable=True)
+    std_min = db.Column(db.Float, default=0.0)
+    piece_rate = db.Column(db.Float, default=0.0)
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS workers (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    token TEXT UNIQUE,
-                    department TEXT,
-                    line TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS bundles (
-                    id SERIAL PRIMARY KEY,
-                    barcode_value TEXT NOT NULL DEFAULT '',
-                    barcode_type TEXT,
-                    qty INTEGER,
-                    scanned_at TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    bundle_code TEXT,
-                    status TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS scans (
-                    id SERIAL PRIMARY KEY,
-                    token TEXT,
-                    kind TEXT,
-                    scanned_at TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS activities (
-                    id SERIAL PRIMARY KEY,
-                    who TEXT,
-                    what TEXT,
-                    when_ts TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
 
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM bundles;")
-            count = cur.fetchone()[0]
+class Bundle(db.Model):
+    __tablename__ = "bundles"
+    id = db.Column(db.Integer, primary_key=True)
+    bundle_code = db.Column(db.String(32), unique=True, nullable=False)
+    qty = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(40), nullable=False, default="pending")
+    # keep this nullable=True to avoid NotNullViolation during seeds/legacy rows
+    barcode_value = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-        if count == 0 and os.getenv("SKIP_SEED", "0") != "1":
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                cur.execute("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name='bundles';
-                """)
-                cols = {r[0] for r in cur.fetchall()}
 
-            seed = [("A12", 120, "pending"),
-                    ("B04",  90, "pending"),
-                    ("C33",  45, "pending"),
-                    ("D18",  30, "pending")]
+class Activity(db.Model):
+    __tablename__ = "activities"
+    id = db.Column(db.Integer, primary_key=True)
+    message = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-            with conn.cursor() as cur:
-                if "barcode_value" in cols:
-                    rows = []
-                    for i, (code, qty, status) in enumerate(seed, start=1):
-                        rows.append((
-                            f"BC-{code}-{i:04d}",  # barcode_value (NOT NULL)
-                            "code128",             # barcode_type
-                            qty,
-                            None,                  # scanned_at
-                            code,
-                            status
-                        ))
-                    psycopg2.extras.execute_batch(
-                        cur,
-                        """INSERT INTO bundles
-                           (barcode_value, barcode_type, qty, scanned_at, bundle_code, status)
-                           VALUES (%s,%s,%s,%s,%s,%s)""",
-                        rows
-                    )
-                    log.info("Seeded bundles with dynamic columns: ['bundle_code','qty','status','barcode_value']")
-                else:
-                    psycopg2.extras.execute_batch(
-                        cur,
-                        "INSERT INTO bundles (bundle_code, qty, status) VALUES (%s,%s,%s)",
-                        seed
-                    )
-                    log.info("Seeded bundles without barcode_value (column missing)")
 
-                psycopg2.extras.execute_batch(
-                    cur,
-                    "INSERT INTO activities (who, what, when_ts) VALUES (%s,%s,%s)",
-                    [
-                        ("System", "Initialized database", datetime.utcnow()),
-                        ("System", "Seeded demo bundles", datetime.utcnow() + timedelta(seconds=1)),
-                    ],
-                )
-            conn.commit()
-        else:
-            log.info("Bundles already present (%s) — seeding skipped", count)
+# --------------------------------------------------------------------------------------
+# Bootstrap (create tables + seed data once)
+# --------------------------------------------------------------------------------------
+def seed_once():
+    """Create tables and insert small seed only if DB is empty."""
+    db.create_all()
 
-ensure_db()
+    # Workers
+    if Worker.query.count() == 0:
+        workers = [
+            Worker(name="Arun K", token_id="W001", department="Cutting", line="L1", status="Active"),
+            Worker(name="Priya S", token_id="W002", department="Stitching", line="L2", status="Idle"),
+            Worker(name="Rahul M", token_id="W003", department="Finishing", line="L3", status="Active"),
+        ]
+        db.session.add_all(workers)
 
-# -----------------------------------------------------------------------------
-# Static UI routes
-# -----------------------------------------------------------------------------
+    # Operations
+    if Operation.query.count() == 0:
+        ops = [
+            Operation(seq_no=10, op_no="OP-101", description="Front stitch", machine="SNLS", department="Stitching", std_min=1.2, piece_rate=2.5),
+            Operation(seq_no=20, op_no="OP-205", description="Sleeve attach", machine="OL", department="Stitching", std_min=1.8, piece_rate=3.0),
+            Operation(seq_no=30, op_no="OP-310", description="Quality check", machine="-", department="QC", std_min=0.9, piece_rate=1.0),
+        ]
+        db.session.add_all(ops)
+
+    # Bundles
+    if Bundle.query.count() == 0:
+        bundles = [
+            Bundle(bundle_code="A12", qty=120, status="pending", barcode_value="A12-0001"),
+            Bundle(bundle_code="B05", qty=80, status="in_progress", barcode_value="B05-0001"),
+            Bundle(bundle_code="C77", qty=60, status="completed", barcode_value="C77-0001"),
+            Bundle(bundle_code="D15", qty=40, status="pending", barcode_value="D15-0001"),
+        ]
+        db.session.add_all(bundles)
+
+    # Activities
+    if Activity.query.count() == 0:
+        acts = [
+            Activity(message="System initialized"),
+            Activity(message="Bundles seeded"),
+            Activity(message="Workers imported"),
+        ]
+        db.session.add_all(acts)
+
+    db.session.commit()
+    log.info("DB ready. Workers=%s, Operations=%s, Bundles=%s",
+             Worker.query.count(), Operation.query.count(), Bundle.query.count())
+
+
+with app.app_context():
+    seed_once()
+
+
+# --------------------------------------------------------------------------------------
+# Views (HTML)
+# --------------------------------------------------------------------------------------
 @app.get("/")
-def serve_index():
-    if UI_DIR and (UI_DIR / "index.html").exists():
-        return send_from_directory(str(UI_DIR), "index.html")
-    # Helpful fallback page
-    body = f"""
-    <h2>Factory Ops Dashboard</h2>
-    <p><code>index.html</code> not found in any of:</p>
-    <pre>{chr(10).join(str(p) for p in CANDIDATE_UI_DIRS)}</pre>
-    <p>Place <code>index.html</code>, <code>style.css</code>, and <code>app.js</code> in ONE of those folders and redeploy.</p>
-    <ul>
-      <li>Check API: <a href="/api/stats">/api/stats</a></li>
-      <li>Health: <a href="/health">/health</a></li>
-    </ul>
-    """
-    return body, 200, {"Content-Type": "text/html; charset=utf-8"}
+def home():
+    return render_template("index.html")
 
-# Serve common asset filenames at the root (so your existing <link src="./style.css"> works)
-ASSET_EXTS = {".css", ".js", ".map", ".ico", ".png", ".jpg", ".jpeg", ".svg",
-              ".woff", ".woff2", ".ttf", ".eot", ".json"}
 
-@app.get("/<path:filename>")
-def serve_assets(filename: str):
-    # Do NOT swallow API routes
-    if filename.startswith("api/") or filename in {"health"}:
-        abort(404)
-    # Only serve static-like extensions
-    ext = Path(filename).suffix.lower()
-    if ext not in ASSET_EXTS:
-        abort(404)
-    # Try the chosen UI_DIR first, then all candidates
-    search_dirs = ([UI_DIR] if UI_DIR else []) + CANDIDATE_UI_DIRS
-    for d in search_dirs:
-        if d and (d / filename).exists():
-            return send_from_directory(str(d), filename)
-        # Also try same filename but sitting directly under d (no subfolders)
-        if d and (d / Path(filename).name).exists():
-            return send_from_directory(str(d), Path(filename).name)
-    abort(404)
-
-# -----------------------------------------------------------------------------
-# Health
-# -----------------------------------------------------------------------------
-@app.get("/health")
-def health():
-    return jsonify({"ok": True, "time": datetime.utcnow().isoformat() + "Z"})
-
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
 # APIs
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
 @app.get("/api/stats")
 def api_stats():
-    if not DATABASE_URL:
-        return jsonify({
-            "active_workers": 12,
-            "total_operations": 348,
-            "bundles": 4,
-            "earnings_today": 1250,
-        })
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM workers;")
-        workers = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM scans;")
-        ops = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM bundles;")
-        bundles = cur.fetchone()[0]
-        cur.execute("SELECT COALESCE(SUM(qty),0) FROM bundles WHERE status IS NOT NULL;")
-        earnings = (cur.fetchone()[0] or 0) * 10
+    workers = Worker.query.count()
+    bundles = Bundle.query.count()
+    ops = Operation.query.count()
+    earnings = round(sum(o.piece_rate * (o.std_min or 0) for o in Operation.query), 2)
 
     return jsonify({
-        "active_workers": workers,
+        "active_workers": workers,         # Simplified: count all as active for KPI
+        "total_bundles": bundles,
         "total_operations": ops,
-        "bundles": bundles,
-        "earnings_today": earnings,
+        "total_earnings": earnings,
+        "last_updated": datetime.utcnow().isoformat() + "Z"
     })
+
 
 @app.get("/api/activities")
 def api_activities():
-    items = []
-    if DATABASE_URL:
-        with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT who, what, when_ts FROM activities ORDER BY when_ts DESC LIMIT 25;")
-            items = [{"who": r["who"], "what": r["what"], "when": r["when_ts"].isoformat()} for r in cur.fetchall()]
-    else:
-        items = [
-            {"who": "System", "what": "Server started", "when": datetime.utcnow().isoformat()},
-            {"who": "Scanner", "what": "Processed 3 bundles", "when": datetime.utcnow().isoformat()},
-        ]
-    return jsonify(items)
+    rows = Activity.query.order_by(Activity.created_at.desc()).limit(20).all()
+    return jsonify([
+        {"message": r.message, "created_at": r.created_at.isoformat() + "Z"}
+        for r in rows
+    ])
+
+
+@app.get("/api/bundles")
+def api_bundles():
+    rows = Bundle.query.order_by(Bundle.created_at.desc()).all()
+    return jsonify([
+        {
+            "bundle_code": r.bundle_code,
+            "qty": r.qty,
+            "status": r.status,
+            "barcode_value": r.barcode_value,
+            "created_at": r.created_at.isoformat() + "Z"
+        } for r in rows
+    ])
+
+
+@app.get("/api/workers")
+def api_workers():
+    q = Worker.query
+    # optional filters
+    dept = request.args.get("department")
+    status = request.args.get("status")
+    search = request.args.get("q")
+    if dept:
+        q = q.filter(Worker.department == dept)
+    if status:
+        q = q.filter(Worker.status == status)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(Worker.name.ilike(like))
+    rows = q.order_by(Worker.name.asc()).all()
+    return jsonify([
+        {
+            "name": r.name,
+            "token_id": r.token_id,
+            "department": r.department,
+            "line": r.line,
+            "status": r.status,
+            "qrcode": r.qrcode or r.token_id,
+        } for r in rows
+    ])
+
+
+@app.get("/api/operations")
+def api_operations():
+    rows = Operation.query.order_by(Operation.seq_no.asc()).all()
+    return jsonify([
+        {
+            "seq_no": r.seq_no, "op_no": r.op_no, "description": r.description,
+            "machine": r.machine, "department": r.department,
+            "std_min": r.std_min, "piece_rate": r.piece_rate
+        } for r in rows
+    ])
+
 
 @app.get("/api/chart-data")
-def chart_data():
-    now = datetime.utcnow()
-    labels = [(now - timedelta(days=30 - i)).strftime("%b %d") for i in range(31)]
-    values = [max(0, (i * 3) % 20 - (i // 7)) for i in range(31)]
-    return jsonify({"labels": labels, "values": values})
+def api_chart_data():
+    # Bundle status distribution
+    statuses = [b.status for b in Bundle.query.all()]
+    status_counts = Counter(statuses)
+    status_labels = list(status_counts.keys())
+    status_values = [status_counts[k] for k in status_labels]
 
-@app.get("/api/export-earnings.csv")
-def export_earnings_csv():
-    rows = [("Department", "Earnings")]
-    if DATABASE_URL:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT COALESCE(w.department,'Unknown') AS dept, COALESCE(SUM(b.qty),0) * 10 AS earnings
-                FROM bundles b
-                LEFT JOIN workers w ON TRUE
-                GROUP BY dept
-                ORDER BY dept;
-            """)
-            for dept, earnings in cur.fetchall():
-                rows.append((dept, int(earnings)))
-    else:
-        rows += [("Cutting", 540), ("Sewing", 760), ("Finishing", 320)]
+    # Department workload = count operations by department
+    depts = [o.department or "Unknown" for o in Operation.query.all()]
+    dept_counts = Counter(depts)
+    dept_labels = list(dept_counts.keys())
+    dept_values = [dept_counts[k] for k in dept_labels]
 
-    buf = io.StringIO()
-    csv.writer(buf).writerows(rows)
-    return Response(
-        buf.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=earnings.csv"},
-    )
+    return jsonify({
+        "bundleStatus": {"labels": status_labels, "values": status_values},
+        "departmentWorkload": {"labels": dept_labels, "values": dept_values},
+    })
 
-@app.post("/api/simulate-scan")
-def simulate_scan():
-    data = request.get_json(force=True, silent=True) or {}
-    token = str(data.get("token", "")).strip()
-    kind = str(data.get("kind", "Work")).strip()
 
-    if DATABASE_URL and token:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("INSERT INTO scans (token, kind) VALUES (%s,%s);", (token, kind))
-            conn.commit()
-    return jsonify({"ok": True, "token": token, "kind": kind})
+@app.post("/api/scan")
+def api_scan():
+    """
+    Accepts JSON: { "barcode": "A12-0001" }
+    Finds bundle by prefix (bundle_code) and moves to 'in_progress', logs activity.
+    """
+    data = request.get_json(silent=True) or {}
+    barcode = data.get("barcode", "").strip()
+    if not barcode:
+        return jsonify({"error": "barcode is required"}), 400
 
-# -----------------------------------------------------------------------------
-# Entry
-# -----------------------------------------------------------------------------
+    # Simple: bundle_code is part before first dash, e.g., "A12-0001" -> "A12"
+    code = barcode.split("-")[0]
+    bundle = Bundle.query.filter_by(bundle_code=code).first()
+    if not bundle:
+        return jsonify({"error": f"bundle not found for code '{code}'"}), 404
+
+    # Update
+    prev = bundle.status
+    bundle.status = "in_progress" if prev == "pending" else "completed"
+    bundle.barcode_value = barcode
+    db.session.add(Activity(message=f"Scan {barcode}: {prev} → {bundle.status}"))
+    db.session.commit()
+
+    return jsonify({"ok": True, "bundle_code": bundle.bundle_code, "status": bundle.status})
+
+
+# Healthcheck for Render
+@app.get("/healthz")
+def healthz():
+    return jsonify({"ok": True})
+
+
+# Serve favicon if needed
+@app.get("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
+
+
+# --------------------------------------------------------------------------------------
+# Gunicorn entry
+# --------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
+    # Local dev
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)

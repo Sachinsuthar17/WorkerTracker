@@ -1,34 +1,75 @@
-:root {
-  --ring: 0 0% 9%;
+:root { --bg: #0b1020; --panel: #111834; --muted: #96a0c6; --text: #e8ecff; --brand: #6c8cff; --brand-2:#45e0a6; --border: #1d264a; }
+* { box-sizing: border-box; }
+html,body { height: 100%; }
+body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: radial-gradient(1200px 800px at 20% -20%, #1b2450 0%, transparent 60%), radial-gradient(1000px 700px at 120% 0%, #0f1b45 0%, transparent 55%), var(--bg); color: var(--text); }
+
+.app { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+
+/* Sidebar */
+.sidebar { background: linear-gradient(180deg, #0e1633 0%, #0b122a 100%); border-right: 1px solid var(--border); position: sticky; top: 0; height: 100vh; padding: 16px; }
+.sidebar-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.logo h2 { margin:0; letter-spacing:1px; color:#cdd6ff; }
+.sidebar-toggle { width:38px; height:34px; border:1px solid var(--border); background:transparent; border-radius:10px; display:grid; place-items:center; gap:3px; cursor:pointer; }
+.sidebar-toggle span { display:block; width:18px; height:2px; background:#a7b2e8; }
+
+.sidebar-nav { display:flex; flex-direction:column; gap:6px; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:10px 12px; color:#c9d3ff; text-decoration:none; border-radius:10px; border:1px solid transparent; transition:.2s; }
+.nav-item:hover { background:#0e1a3d; border-color:#182456; }
+.nav-item.active { background: linear-gradient(180deg, #111b3b, #0c1531); border-color:#1f2b59; box-shadow: inset 0 0 0 1px #192758; }
+.nav-icon { font-size:18px; }
+.nav-text { font-weight:500; }
+
+/* Main */
+.main-content { padding: 24px; background: radial-gradient(1000px 600px at 60% 0%, #112155 0%, transparent 60%); }
+.section { display:none; }
+.section.active { display:block; }
+.section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.header-actions { display:flex; align-items:center; gap:12px; }
+.last-updated { color:var(--muted); font-size:14px; }
+
+/* Cards / grids */
+.kpi-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:14px; margin-bottom:18px; }
+.kpi-card, .chart-card, .activity-card, .order-card, .upload-card, .report-card { background: linear-gradient(180deg, #0e1735, #0c1330); border:1px solid #1a2450; border-radius:16px; padding:16px; box-shadow: inset 0 0 0 1px rgba(140,160,255,0.06); }
+.kpi-card { display:flex; gap:12px; align-items:center; }
+.kpi-icon { width:44px; height:44px; display:grid; place-items:center; border-radius:12px; background:#101c45; border:1px solid #1b2a61; }
+.kpi-value { font-size:28px; font-weight:700; }
+.kpi-label { color:var(--muted); font-size:13px; }
+
+.charts-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+.activity-feed { display:flex; flex-direction:column; gap:8px; max-height:220px; overflow:auto; }
+.activity-feed .item { display:flex; justify-content:space-between; gap:10px; font-size:14px; color:#cad3ff; }
+.activity-feed .time { color:#93a0d0; }
+
+/* Tables */
+.table-container { background:transparent; border-radius:12px; overflow:auto; border:1px solid #1a2450; }
+.data-table { width:100%; border-collapse: collapse; }
+.data-table th, .data-table td { padding:10px 12px; border-bottom:1px solid #15204a; }
+.data-table thead th { position:sticky; top:0; background:#0f183a; }
+
+/* Bundles */
+.bundles-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap:12px; }
+.bundle { padding:12px; border-radius:14px; border:1px solid #1c2550; background:linear-gradient(180deg,#0f1938,#0c1430); }
+.bundle .code { font-weight:700; }
+.bundle .meta { color:#8ea0d6; font-size:13px; }
+
+/* Forms / Buttons */
+.form-control { background:#0f1a3e; border:1px solid #1b2553; color:#e6eaff; padding:10px 12px; border-radius:10px; }
+.search-input { width:260px; }
+.btn { border:1px solid #1b2553; background:#0d1736; color:#e6eaff; padding:10px 14px; border-radius:10px; cursor:pointer; }
+.btn--primary { border-color:#2840a5; background: linear-gradient(180deg,#1b2f7a,#152660); }
+.btn--secondary { border-color:#265a4d; background: linear-gradient(180deg,#19483e,#143d35); }
+.btn--outline { background:transparent; }
+
+/* Scanner demo */
+.scanner-container { display:flex; gap:14px; align-items:center; }
+.scanner-screen { width:260px; height:180px; border:1px solid #1d2755; background:#09132e; border-radius:12px; position:relative; overflow:hidden; display:grid; place-items:center; }
+.scan-line { position:absolute; left:0; right:0; height:2px; background:#45e0a6; animation: scan 2.2s linear infinite; }
+@keyframes scan { 0%{ top:8px; } 100%{ top: calc(100% - 8px); } }
+
+/* Responsive */
+@media (max-width: 1000px) {
+  .app { grid-template-columns: 80px 1fr; }
+  .nav-text { display:none; }
+  .charts-grid { grid-template-columns:1fr; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
 }
-.nav-link { @apply text-slate-600 hover:text-slate-900 transition; }
-.section-title { @apply text-lg font-semibold tracking-tight; }
-.card {
-  @apply bg-white rounded-2xl shadow-sm border border-slate-200 p-5;
-}
-.card-title { @apply font-medium mb-3; }
-.stat { @apply flex flex-col gap-1; }
-.stat-label { @apply text-slate-500 text-sm; }
-.stat-value { @apply text-3xl font-semibold; }
-.input {
-  @apply border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-300;
-}
-.file-input {
-  @apply block w-full text-sm file:mr-3 file:py-2 file:px-3 file:border-0
-         file:rounded-lg file:bg-slate-900 file:text-white hover:file:bg-black
-         border border-slate-300 rounded-lg;
-}
-.btn {
-  @apply inline-flex items-center gap-2 rounded-xl px-4 py-2 bg-slate-900 text-white text-sm
-         hover:bg-black active:scale-[.99] transition;
-}
-.table {
-  @apply w-full text-sm;
-}
-.table thead th {
-  @apply text-left font-semibold text-slate-600 border-b border-slate-200 py-2;
-}
-.table tbody td {
-  @apply border-b border-slate-100 py-2;
-}
-.muted { @apply text-slate-500 text-sm; }

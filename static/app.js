@@ -1,144 +1,251 @@
-// Production Dashboard JavaScript
+// Production Management System - JavaScript
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize dashboard if we're on the dashboard page
-    if (document.getElementById('statsGrid')) {
-        initializeDashboard();
-    }
-
-    // Initialize mobile menu
-    initializeMobileMenu();
+    // Initialize the application
+    initializeApp();
 });
 
-let productionChart = null;
-let workerChart = null;
+// Global variables
+let currentSection = 'dashboard';
+let isScanning = false;
+let scanInterval;
+let refreshInterval;
 
-// Dashboard initialization
-async function initializeDashboard() {
-    try {
-        await loadStats();
-        await loadChartData();
-        await loadActivities();
-        startLiveUpdates();
-        console.log('Dashboard initialized successfully');
-    } catch (error) {
-        console.error('Error initializing dashboard:', error);
-    }
+// Charts
+let bundleStatusChart = null;
+let departmentChart = null;
+
+// Initialize application
+function initializeApp() {
+    setupEventListeners();
+    setupMobileMenu();
+    loadDashboard();
+    startAutoRefresh();
+    console.log('Production Management System initialized');
 }
 
-// Load and render statistics
-async function loadStats() {
-    try {
-        const response = await fetch('/api/stats');
-        const stats = await response.json();
-        renderStatsCards(stats);
-    } catch (error) {
-        console.error('Error loading stats:', error);
-    }
-}
-
-// Render stats cards
-function renderStatsCards(stats) {
-    const statsGrid = document.getElementById('statsGrid');
-    if (!statsGrid) return;
-
-    statsGrid.innerHTML = '';
-
-    const icons = ['chart-line', 'users', 'percentage', 'rupee-sign'];
-    const colors = [
-        'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-        'linear-gradient(135deg, #06b6d4, #0891b2)',
-        'linear-gradient(135deg, #f59e0b, #d97706)',
-        'linear-gradient(135deg, #10b981, #059669)'
-    ];
-
-    Object.values(stats).forEach((stat, index) => {
-        const card = document.createElement('div');
-        card.className = 'stat-card';
-
-        const changeClass = stat.change >= 0 ? 'positive' : 'negative';
-        const changeSymbol = stat.change >= 0 ? '+' : '';
-
-        card.innerHTML = `
-            <div class="stat-icon" style="background: ${colors[index]}">
-                <i class="fas fa-${icons[index]}"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value">${index === 3 ? '₹' : ''}${formatNumber(stat.value)}${index === 2 ? '%' : ''}</div>
-                <div class="stat-label">${stat.label}</div>
-                <div class="stat-change ${changeClass}">${changeSymbol}${stat.change}%</div>
-            </div>
-        `;
-
-        statsGrid.appendChild(card);
+// Setup all event listeners
+function setupEventListeners() {
+    // Navigation
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', handleNavigation);
     });
+
+    // Dashboard refresh
+    const refreshBtn = document.getElementById('refreshBtn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', refreshDashboard);
+    }
+
+    // Search inputs
+    const workerSearch = document.getElementById('workerSearch');
+    if (workerSearch) {
+        workerSearch.addEventListener('input', debounce(searchWorkers, 300));
+    }
+
+    const operationSearch = document.getElementById('operationSearch');
+    if (operationSearch) {
+        operationSearch.addEventListener('input', debounce(searchOperations, 300));
+    }
+
+    // Filters
+    const departmentFilter = document.getElementById('departmentFilter');
+    if (departmentFilter) {
+        departmentFilter.addEventListener('change', searchWorkers);
+    }
+
+    const statusFilter = document.getElementById('statusFilter');
+    if (statusFilter) {
+        statusFilter.addEventListener('change', searchWorkers);
+    }
+
+    // File uploads
+    setupFileUploads();
+
+    // Scanner controls
+    setupScannerControls();
 }
 
-// Load and render charts
+// Setup mobile menu
+function setupMobileMenu() {
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    const sidebar = document.getElementById('sidebar');
+
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('active');
+        });
+
+        // Close sidebar when clicking outside on mobile
+        document.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768 && 
+                !sidebar.contains(e.target) && 
+                !sidebarToggle.contains(e.target)) {
+                sidebar.classList.remove('active');
+            }
+        });
+    }
+}
+
+// Handle navigation between sections
+function handleNavigation(e) {
+    e.preventDefault();
+    const section = e.currentTarget.dataset.section;
+    
+    if (section === currentSection) return;
+
+    // Update nav items
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    e.currentTarget.classList.add('active');
+
+    // Show/hide sections
+    document.querySelectorAll('.section').forEach(sec => {
+        sec.classList.remove('active');
+    });
+    
+    const targetSection = document.getElementById(section);
+    if (targetSection) {
+        targetSection.classList.add('active');
+        currentSection = section;
+        
+        // Load section data
+        loadSectionData(section);
+        
+        // Close mobile menu
+        if (window.innerWidth <= 768) {
+            document.getElementById('sidebar').classList.remove('active');
+        }
+    }
+}
+
+// Load data for specific section
+function loadSectionData(section) {
+    switch (section) {
+        case 'dashboard':
+            loadDashboard();
+            break;
+        case 'workers':
+            loadWorkers();
+            break;
+        case 'operations':
+            loadOperations();
+            break;
+        case 'bundles':
+            loadBundles();
+            break;
+        case 'production-order':
+            loadProductionOrder();
+            break;
+        case 'scanner':
+            loadRecentScans();
+            break;
+    }
+}
+
+// Dashboard functions
+async function loadDashboard() {
+    try {
+        await Promise.all([
+            loadDashboardStats(),
+            loadChartData(),
+            loadRecentActivity()
+        ]);
+    } catch (error) {
+        console.error('Error loading dashboard:', error);
+    }
+}
+
+async function loadDashboardStats() {
+    try {
+        const response = await fetch('/api/dashboard-stats');
+        const stats = await response.json();
+        
+        updateKPICard('activeWorkers', stats.activeWorkers);
+        updateKPICard('totalBundles', stats.totalBundles);
+        updateKPICard('totalOperations', stats.totalOperations);
+        updateKPICard('totalEarnings', `₹${stats.totalEarnings.toFixed(2)}`);
+        
+    } catch (error) {
+        console.error('Error loading dashboard stats:', error);
+        // Set default values
+        updateKPICard('activeWorkers', '0');
+        updateKPICard('totalBundles', '0');
+        updateKPICard('totalOperations', '0');
+        updateKPICard('totalEarnings', '₹0.00');
+    }
+}
+
+function updateKPICard(id, value) {
+    const element = document.getElementById(id);
+    if (element) {
+        element.textContent = value;
+        element.parentElement.parentElement.classList.add('pulse');
+        setTimeout(() => {
+            element.parentElement.parentElement.classList.remove('pulse');
+        }, 1000);
+    }
+}
+
 async function loadChartData() {
     try {
         const response = await fetch('/api/chart-data');
-        const chartData = await response.json();
-
-        createProductionChart(chartData.dailyProduction);
-        createWorkerChart(chartData.workerPerformance);
+        const data = await response.json();
+        
+        updateBundleStatusChart(data.bundleStatus || {});
+        updateDepartmentChart(data.departmentWorkload || {});
+        
     } catch (error) {
         console.error('Error loading chart data:', error);
+        // Load with sample data
+        updateBundleStatusChart({
+            'Pending': 3,
+            'In Progress': 5,
+            'Completed': 6
+        });
+        updateDepartmentChart({
+            'Cutting': 8,
+            'Sewing': 12,
+            'Finishing': 6,
+            'Quality': 4,
+            'Packing': 3
+        });
     }
 }
 
-// Create production trend chart
-function createProductionChart(data) {
-    const ctx = document.getElementById('productionChart');
+function updateBundleStatusChart(data) {
+    const ctx = document.getElementById('bundleStatusChart');
     if (!ctx) return;
 
-    if (productionChart) {
-        productionChart.destroy();
+    if (bundleStatusChart) {
+        bundleStatusChart.destroy();
     }
 
-    productionChart = new Chart(ctx, {
-        type: 'line',
+    const labels = Object.keys(data);
+    const values = Object.values(data);
+    const colors = ['#f59e0b', '#3b82f6', '#10b981', '#ef4444'];
+
+    bundleStatusChart = new Chart(ctx, {
+        type: 'doughnut',
         data: {
-            labels: data.labels,
+            labels: labels,
             datasets: [{
-                label: 'Daily Production',
-                data: data.data,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                borderWidth: 3,
-                fill: true,
-                tension: 0.4,
-                pointBackgroundColor: '#3b82f6',
-                pointBorderColor: '#ffffff',
-                pointBorderWidth: 2,
-                pointRadius: 6
+                data: values,
+                backgroundColor: colors,
+                borderWidth: 0,
+                hoverOffset: 4
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(30, 41, 59, 0.9)',
-                    titleColor: '#f8fafc',
-                    bodyColor: '#cbd5e1',
-                    borderColor: '#374151',
-                    borderWidth: 1,
-                    cornerRadius: 8
-                }
-            },
-            scales: {
-                x: {
-                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
-                    ticks: { color: '#64748b' }
-                },
-                y: {
-                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
-                    ticks: { 
-                        color: '#64748b',
-                        callback: function(value) {
-                            return formatNumber(value);
-                        }
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        color: '#b8bcc8',
+                        padding: 20,
+                        usePointStyle: true
                     }
                 }
             }
@@ -146,146 +253,83 @@ function createProductionChart(data) {
     });
 }
 
-// Create worker performance chart
-function createWorkerChart(data) {
-    const ctx = document.getElementById('workerChart');
+function updateDepartmentChart(data) {
+    const ctx = document.getElementById('departmentChart');
     if (!ctx) return;
 
-    if (workerChart) {
-        workerChart.destroy();
+    if (departmentChart) {
+        departmentChart.destroy();
     }
 
-    const colors = ['#3b82f6', '#06b6d4', '#f59e0b', '#10b981', '#ef4444'];
+    const labels = Object.keys(data);
+    const values = Object.values(data);
 
-    workerChart = new Chart(ctx, {
+    departmentChart = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: data.labels,
+            labels: labels,
             datasets: [{
-                label: 'Efficiency %',
-                data: data.data,
-                backgroundColor: colors,
-                borderRadius: 6
+                label: 'Workers',
+                data: values,
+                backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                borderColor: '#3b82f6',
+                borderWidth: 1,
+                borderRadius: 8
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(30, 41, 59, 0.9)',
-                    titleColor: '#f8fafc',
-                    bodyColor: '#cbd5e1',
-                    borderColor: '#374151',
-                    borderWidth: 1,
-                    cornerRadius: 8
+                legend: {
+                    display: false
                 }
             },
             scales: {
                 x: {
-                    grid: { display: false },
-                    ticks: { color: '#64748b' }
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#b8bcc8'
+                    }
                 },
                 y: {
-                    grid: { color: 'rgba(55, 65, 81, 0.3)' },
-                    ticks: { 
-                        color: '#64748b',
-                        callback: function(value) { return value + '%'; }
-                    },
                     beginAtZero: true,
-                    max: 100
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#b8bcc8'
+                    }
                 }
             }
         }
     });
 }
 
-// Load and render activities
-async function loadActivities() {
+async function loadRecentActivity() {
     try {
-        const response = await fetch('/api/activities');
+        const response = await fetch('/api/recent-activity');
         const activities = await response.json();
-        renderActivities(activities);
-    } catch (error) {
-        console.error('Error loading activities:', error);
-    }
-}
-
-// Render activities
-function renderActivities(activities) {
-    const activitiesList = document.getElementById('activitiesList');
-    if (!activitiesList) return;
-
-    activitiesList.innerHTML = '';
-
-    activities.forEach(activity => {
-        const item = document.createElement('div');
-        item.className = 'activity-item';
-
-        const actionColor = activity.action === 'Completed' ? '#10b981' : '#f59e0b';
-
-        item.innerHTML = `
-            <div class="activity-info">
-                <div class="activity-worker">${activity.worker}</div>
-                <div class="activity-action">
-                    <span style="color: ${actionColor}">${activity.action}</span> 
-                    ${activity.operation}
-                </div>
-            </div>
-            <div class="activity-time">${activity.time}</div>
-        `;
-
-        activitiesList.appendChild(item);
-    });
-}
-
-// Initialize mobile menu
-function initializeMobileMenu() {
-    const menuToggle = document.getElementById('mobileMenuToggle');
-    const sidebar = document.getElementById('sidebar');
-
-    if (menuToggle && sidebar) {
-        menuToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('show');
-        });
-
-        // Close sidebar when clicking outside
-        document.addEventListener('click', function(e) {
-            if (!sidebar.contains(e.target) && !menuToggle.contains(e.target)) {
-                sidebar.classList.remove('show');
+        
+        const activityFeed = document.getElementById('activityFeed');
+        if (activityFeed) {
+            if (activities.length === 0) {
+                activityFeed.innerHTML = `
+                    <div class="activity-item">
+                        <span class="activity-text">No recent activity</span>
+                        <span class="activity-time">-</span>
+                    </div>
+                `;
+            } else {
+                activityFeed.innerHTML = activities.map(activity => `
+                    <div class="activity-item">
+                        <span class="activity-text">${activity.type}: ${activity.description}</span>
+                        <span class="activity-time">${formatTime(activity.created_at)}</span>
+                    </div>
+                `).join('');
             }
-        });
-    }
-}
-
-// Start live updates for dashboard
-function startLiveUpdates() {
-    setInterval(async function() {
-        if (document.getElementById('statsGrid')) {
-            await loadStats();
-            await loadActivities();
         }
-    }, 30000); // Update every 30 seconds
-}
-
-// Utility function to format numbers
-function formatNumber(num) {
-    if (num >= 1000000) {
-        return (num / 1000000).toFixed(1) + 'M';
-    } else if (num >= 1000) {
-        return (num / 1000).toFixed(1) + 'K';
-    }
-    return num.toLocaleString();
-}
-
-// Chart button controls
-document.addEventListener('click', function(e) {
-    if (e.target.classList.contains('chart-btn')) {
-        const group = e.target.parentElement;
-        group.querySelectorAll('.chart-btn').forEach(btn => {
-            btn.classList.remove('active');
-        });
-        e.target.classList.add('active');
-    }
-});
+    } catch (error) {
+        console.error('

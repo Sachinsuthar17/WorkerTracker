@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production Management System</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <h2>PMS</h2>
+                </div>
+                <button class="sidebar-toggle" id="sidebarToggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-section="dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-section="workers">
+                    <span class="nav-icon">👥</span>
+                    <span class="nav-text">Worker Management</span>
+                </a>
+                <a href="#" class="nav-item" data-section="operations">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-text">Operations Management</span>
+                </a>
+                <a href="#" class="nav-item" data-section="bundles">
+                    <span class="nav-icon">📦</span>
+                    <span class="nav-text">Bundle Management</span>
+                </a>
+                <a href="#" class="nav-item" data-section="production-order">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Production Order</span>
+                </a>
+                <a href="#" class="nav-item" data-section="file-upload">
+                    <span class="nav-icon">📁</span>
+                    <span class="nav-text">File Upload</span>
+                </a>
+                <a href="#" class="nav-item" data-section="scanner">
+                    <span class="nav-icon">📱</span>
+                    <span class="nav-text">ESP32 Scanner</span>
+                </a>
+                <a href="#" class="nav-item" data-section="reports">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-text">Reports</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content" id="mainContent">
+            <!-- Dashboard Section -->
+            <section class="section active" id="dashboard">
+                <div class="section-header">
+                    <h1>Dashboard Overview</h1>
+                    <div class="header-actions">
+                        <span class="last-updated" id="lastUpdated">Last updated: Just now</span>
+                        <button class="btn btn--primary" id="refreshBtn">Refresh</button>
+                    </div>
+                </div>
+
+                <!-- KPI Cards -->
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-icon">👥</div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="activeWorkers">0</div>
+                            <div class="kpi-label">Active Workers</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">📦</div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="totalBundles">0</div>
+                            <div class="kpi-label">Total Bundles</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">⚙️</div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="totalOperations">0</div>
+                            <div class="kpi-label">Operations</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">💰</div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="totalEarnings">₹0</div>
+                            <div class="kpi-label">Total Earnings</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts -->
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <h3>Bundle Status Distribution</h3>
+                        <div class="chart-container" style="position: relative; height: 300px;">
+                            <canvas id="bundleStatusChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Department Workload</h3>
+                        <div class="chart-container" style="position: relative; height: 300px;">
+                            <canvas id="departmentChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="activity-card">
+                    <h3>Recent Activity</h3>
+                    <div class="activity-feed" id="activityFeed">
+                        <div class="activity-item">
+                            <span class="activity-text">System initialized successfully</span>
+                            <span class="activity-time">Just now</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Worker Management Section -->
+            <section class="section" id="workers">
+                <div class="section-header">
+                    <h1>Worker Management</h1>
+                    <div class="header-controls">
+                        <input type="text" class="form-control search-input" id="workerSearch" placeholder="Search workers...">
+                        <select class="form-control" id="departmentFilter">
+                            <option value="">All Departments</option>
+                            <option value="Cutting">Cutting</option>
+                            <option value="Sewing">Sewing</option>
+                            <option value="Finishing">Finishing</option>
+                            <option value="Quality">Quality</option>
+                            <option value="Packing">Packing</option>
+                        </select>
+                        <select class="form-control" id="statusFilter">
+                            <option value="">All Status</option>
+                            <option value="Active">Active</option>
+                            <option value="Idle">Idle</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Token ID</th>
+                                <th>Department</th>
+                                <th>Line</th>
+                                <th>Status</th>
+                                <th>QR Code</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="workersTable">
+                            <tr>
+                                <td colspan="7" class="loading">Loading workers...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Operations Management Section -->
+            <section class="section" id="operations">
+                <div class="section-header">
+                    <h1>Operations Management</h1>
+                    <div class="header-controls">
+                        <input type="text" class="form-control search-input" id="operationSearch" placeholder="Search operations...">
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Seq No</th>
+                                <th>Op No</th>
+                                <th>Description</th>
+                                <th>Machine</th>
+                                <th>Department</th>
+                                <th>Std Min</th>
+                                <th>Piece Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="operationsTable">
+                            <tr>
+                                <td colspan="7" class="loading">Loading operations...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Bundle Management Section -->
+            <section class="section" id="bundles">
+                <div class="section-header">
+                    <h1>Bundle Management</h1>
+                </div>
+                <div class="bundles-grid" id="bundlesGrid">
+                    <div class="loading-card">Loading bundles...</div>
+                </div>
+            </section>
+
+            <!-- Production Order Section -->
+            <section class="section" id="production-order">
+                <div class="section-header">
+                    <h1>Production Order</h1>
+                </div>
+                <div class="order-details">
+                    <div class="order-card" id="orderCard">
+                        <h3>Order Details</h3>
+                        <div class="order-info">
+                            <div class="info-row">
+                                <span class="label">Order No:</span>
+                                <span class="value" id="orderNo">Loading...</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Style:</span>
+                                <span class="value" id="orderStyle">Loading...</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Quantity:</span>
+                                <span class="value" id="orderQuantity">Loading...</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Buyer:</span>
+                                <span class="value" id="orderBuyer">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- File Upload Section -->
+            <section class="section" id="file-upload">
+                <div class="section-header">
+                    <h1>File Upload</h1>
+                </div>
+                <div class="upload-grid">
+                    <div class="upload-card">
+                        <h3>OB File (Excel)</h3>
+                        <div class="upload-area" data-upload-type="excel">
+                            <div class="upload-icon">📁</div>
+                            <p>Drag & drop your Excel file here</p>
+                            <button class="btn btn--outline" onclick="document.getElementById('excelFile').click()">Choose File</button>
+                            <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none">
+                        </div>
+                        <div class="upload-status" id="excelStatus"></div>
+                    </div>
+                    <div class="upload-card">
+                        <h3>Production Order (PDF)</h3>
+                        <div class="upload-area" data-upload-type="pdf">
+                            <div class="upload-icon">📄</div>
+                            <p>Drag & drop your PDF file here</p>
+                            <button class="btn btn--outline" onclick="document.getElementById('pdfFile').click()">Choose File</button>
+                            <input type="file" id="pdfFile" accept=".pdf" style="display: none">
+                        </div>
+                        <div class="upload-status" id="pdfStatus"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ESP32 Scanner Section -->
+            <section class="section" id="scanner">
+                <div class="section-header">
+                    <h1>ESP32 Scanner Demo</h1>
+                </div>
+                <div class="scanner-container">
+                    <div class="scanner-display">
+                        <div class="scanner-screen">
+                            <div class="scan-line"></div>
+                            <div class="scanner-status" id="scannerStatus">Ready to Scan</div>
+                            <div class="scan-result" id="scanResult"></div>
+                        </div>
+                    </div>
+                    <div class="scanner-controls">
+                        <button class="btn btn--primary" id="startScan">Start Scan</button>
+                        <button class="btn btn--secondary" id="stopScan" disabled>Stop Scan</button>
+                        <button class="btn btn--outline" id="resetScan">Reset</button>
+                    </div>
+                    <div class="recent-scans">
+                        <h4>Recent Scans</h4>
+                        <div id="recentScans" class="scans-list"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Reports Section -->
+            <section class="section" id="reports">
+                <div class="section-header">
+                    <h1>Reports</h1>
+                </div>
+                <div class="reports-grid">
+                    <div class="report-card">
+                        <h3>Production Report</h3>
+                        <p>Daily production summary and analysis</p>
+                        <button class="btn btn--primary" onclick="generateReport('production')">Generate Report</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>Worker Performance</h3>
+                        <p>Individual worker productivity metrics</p>
+                        <button class="btn btn--primary" onclick="generateReport('worker')">Generate Report</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>Quality Control</h3>
+                        <p>QA metrics and defect analysis</p>
+                        <button class="btn btn--primary" onclick="generateReport('quality')">Generate Report</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>Efficiency Analysis</h3>
+                        <p>Overall efficiency and bottleneck identification</p>
+                        <button class="btn btn--primary" onclick="generateReport('efficiency')">Generate Report</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

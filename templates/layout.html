@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Production Tracker{% endblock %}</title>
-
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -15,7 +14,6 @@
     <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Toggle menu">
       <i class="fas fa-bars" aria-hidden="true"></i>
     </button>
-
     <nav class="sidebar" id="sidebar" aria-label="Main navigation">
       <div class="sidebar-header">
         <div class="logo">
@@ -23,7 +21,6 @@
           <span>Production Tracker</span>
         </div>
       </div>
-
       <ul class="sidebar-menu">
         <li class="menu-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
           <a href="{{ url_for('dashboard') }}" class="menu-link">
@@ -72,12 +69,8 @@
         </li>
       </ul>
     </nav>
-
-    <main class="main-content">
-      {% block content %}{% endblock %}
-    </main>
+    <main class="main-content">{% block content %}{% endblock %}</main>
   </div>
-
   <script>
     (function () {
       const menuToggle = document.getElementById('mobileMenuToggle');
@@ -86,7 +79,6 @@
         menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
       }
     })();
-
     function openPrintWindow(url) {
       try {
         if (!url) return alert('No QR URL provided.');
@@ -100,7 +92,7 @@
               <script>
                 window.onload = function () { setTimeout(function(){ window.print(); }, 500); };
                 window.onafterprint = function () { window.close(); };
-              <\/script>
+              </script>
             </body>
           </html>
         `);
@@ -111,7 +103,6 @@
       }
     }
   </script>
-
   {% block scripts %}{% endblock %}
 </body>
 </html>

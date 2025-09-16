@@ -214,7 +214,9 @@ def seed_sample_data():
             
             # Add sample operations
             cur.execute("SELECT COUNT(*) FROM operations")
-            if cur.fetchone()[0] == 0:
+            op_count = cur.fetchone()[0]
+            
+            if op_count == 0:
                 print("📝 Adding sample operations...")
                 sample_operations = [
                     (1, 'OP001', 'Fabric Cutting', 'Cutting Machine', 'Cutting', 15.5, 25.00),
@@ -232,7 +234,9 @@ def seed_sample_data():
             
             # Add sample bundles
             cur.execute("SELECT COUNT(*) FROM bundles")
-            if cur.fetchone()[0] == 0:
+            bundle_count = cur.fetchone()[0]
+            
+            if bundle_count == 0:
                 print("📝 Adding sample bundles...")
                 sample_bundles = [
                     ('B001', '650010011410', 'SAINTX MENS BLAZER', 'Navy', 'M', 50, 'In Progress'),
@@ -249,7 +253,9 @@ def seed_sample_data():
             
             # Add sample production order
             cur.execute("SELECT COUNT(*) FROM production_orders")
-            if cur.fetchone()[0] == 0:
+            order_count = cur.fetchone()[0]
+            
+            if order_count == 0:
                 print("📝 Adding sample production order...")
                 cur.execute(
                     "INSERT INTO production_orders (order_no, style, quantity, buyer) VALUES (%s, %s, %s, %s)",

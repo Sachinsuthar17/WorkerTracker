@@ -40,9 +40,24 @@
             <i class="fas fa-cogs" aria-hidden="true"></i><span>Operations</span>
           </a>
         </li>
-        <li class="menu-item {% if request.endpoint == 'production' %}active{% endif %}">
-          <a href="{{ url_for('production') }}" class="menu-link">
-            <i class="fas fa-box" aria-hidden="true"></i><span>Production</span>
+        <li class="menu-item {% if request.endpoint == 'bundles' %}active{% endif %}">
+          <a href="{{ url_for('bundles') }}" class="menu-link">
+            <i class="fas fa-boxes" aria-hidden="true"></i><span>Bundles</span>
+          </a>
+        </li>
+        <li class="menu-item {% if request.endpoint == 'production_order' %}active{% endif %}">
+          <a href="{{ url_for('production_order') }}" class="menu-link">
+            <i class="fas fa-clipboard-list" aria-hidden="true"></i><span>Production Order</span>
+          </a>
+        </li>
+        <li class="menu-item {% if request.endpoint == 'file_upload' %}active{% endif %}">
+          <a href="{{ url_for('file_upload') }}" class="menu-link">
+            <i class="fas fa-upload" aria-hidden="true"></i><span>File Upload</span>
+          </a>
+        </li>
+        <li class="menu-item {% if request.endpoint == 'esp32_scanner' %}active{% endif %}">
+          <a href="{{ url_for('esp32_scanner') }}" class="menu-link">
+            <i class="fas fa-barcode" aria-hidden="true"></i><span>ESP32 Scanner</span>
           </a>
         </li>
         <li class="menu-item {% if request.endpoint == 'reports' %}active{% endif %}">
@@ -50,13 +65,11 @@
             <i class="fas fa-chart-bar" aria-hidden="true"></i><span>Reports</span>
           </a>
         </li>
-        <!-- Optional CSV link:
-        <li class="menu-item">
-          <a href="{{ url_for('download_report') }}" class="menu-link">
-            <i class="fas fa-file-arrow-down" aria-hidden="true"></i><span>Download CSV</span>
+        <li class="menu-item {% if request.endpoint == 'settings' %}active{% endif %}">
+          <a href="{{ url_for('settings') }}" class="menu-link">
+            <i class="fas fa-cog" aria-hidden="true"></i><span>Settings</span>
           </a>
         </li>
-        -->
       </ul>
     </nav>
 

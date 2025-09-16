@@ -270,17 +270,53 @@ def seed_sample_data():
             conn.rollback()
 
 # -----------------------------
-# Routes
+# Page Routes (Add these for navigation)
 # -----------------------------
-@app.route("/")
+@app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('dashboard.html')
+
+@app.route('/dashboard')
+def dashboard():
+    return render_template('dashboard.html')
+
+@app.route('/workers')
+def workers():
+    return render_template('workers.html')
+
+@app.route('/operations')
+def operations():
+    return render_template('operations.html')
+
+@app.route('/bundles')
+def bundles():
+    return render_template('bundles.html')
+
+@app.route('/production_order')
+def production_order():
+    return render_template('production_order.html')
+
+@app.route('/file_upload')
+def file_upload():
+    return render_template('file_upload.html')
+
+@app.route('/esp32_scanner')
+def esp32_scanner():
+    return render_template('esp32_scanner.html')
+
+@app.route('/reports')
+def reports():
+    return render_template('reports.html')
+
+@app.route('/settings')
+def settings():
+    return render_template('settings.html')
 
 @app.route("/health")
 def health():
     return "OK", 200
 
-# ===== DASHBOARD API ROUTES =====
+# ===== API ROUTES =====
 @app.route("/api/dashboard-stats")
 def dashboard_stats():
     """Get dashboard statistics"""
@@ -342,149 +378,6 @@ def chart_data():
             "departmentWorkload": {"Cutting": 1, "Sewing": 2, "Finishing": 1, "Quality": 1, "Packing": 1}
         })
 
-@app.route("/api/recent-activity")
-def recent_activity():
-    """Get recent activity for dashboard"""
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT 'Scan' as type, s.code as description, s.created_at
-                FROM scans s
-                ORDER BY s.created_at DESC
-                LIMIT 10
-            """)
-            activities = cur.fetchall()
-            return jsonify([dict(activity) for activity in activities])
-    except Exception as e:
-        print(f"Recent activity error: {e}")
-        return jsonify([])
-
-# ===== WORKERS API ROUTES =====
-@app.route("/api/workers")
-def get_workers():
-    """Get workers with filtering"""
-    try:
-        search = request.args.get('search', '')
-        department = request.args.get('department', '')
-        status = request.args.get('status', '')
-        
-        with get_conn() as conn, conn.cursor() as cur:
-            query = "SELECT * FROM workers WHERE 1=1"
-            params = []
-            
-            if search:
-                query += " AND (name ILIKE %s OR token_id ILIKE %s)"
-                params.extend([f"%{search}%", f"%{search}%"])
-            
-            if department:
-                query += " AND department = %s"
-                params.append(department)
-            
-            if status:
-                query += " AND status = %s"
-                params.append(status)
-            
-            query += " ORDER BY created_at DESC"
-            cur.execute(query, params)
-            workers = cur.fetchall()
-            
-            return jsonify([dict(worker) for worker in workers])
-    except Exception as e:
-        print(f"Workers API error: {e}")
-        return jsonify([])
-
-# ===== OPERATIONS API ROUTES =====
-@app.route("/api/operations")
-def get_operations():
-    """Get operations with filtering"""
-    try:
-        search = request.args.get('search', '')
-        
-        with get_conn() as conn, conn.cursor() as cur:
-            query = "SELECT * FROM operations WHERE 1=1"
-            params = []
-            
-            if search:
-                query += " AND (description ILIKE %s OR op_no ILIKE %s)"
-                params.extend([f"%{search}%", f"%{search}%"])
-            
-            query += " ORDER BY seq_no"
-            cur.execute(query, params)
-            operations = cur.fetchall()
-            
-            return jsonify([dict(op) for op in operations])
-    except Exception as e:
-        print(f"Operations API error: {e}")
-        return jsonify([])
-
-# ===== BUNDLES API ROUTES =====
-@app.route("/api/bundles")
-def get_bundles():
-    """Get all bundles"""
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT * FROM bundles ORDER BY created_at DESC")
-            bundles = cur.fetchall()
-            return jsonify([dict(bundle) for bundle in bundles])
-    except Exception as e:
-        print(f"Bundles API error: {e}")
-        return jsonify([])
-
-# ===== PRODUCTION ORDER API ROUTES =====
-@app.route("/api/production-order")
-def get_production_order():
-    """Get production order details"""
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT * FROM production_orders ORDER BY created_at DESC LIMIT 1")
-            order = cur.fetchone()
-            return jsonify(dict(order) if order else {})
-    except Exception as e:
-        print(f"Production order API error: {e}")
-        return jsonify({})
-
-# ===== FILE UPLOAD API ROUTES =====
-@app.route("/api/upload", methods=["POST"])
-def upload_file():
-    """Handle file uploads"""
-    try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
-        
-        file = request.files['file']
-        file_type = request.form.get('type', 'unknown')
-        
-        if file.filename == '':
-            return jsonify({"error": "No file selected"}), 400
-        
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            unique_filename = f"{uuid.uuid4()}_{filename}"
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-            
-            file.save(file_path)
-            
-            with get_conn() as conn, conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO file_uploads (filename, original_filename, file_type, file_path) VALUES (%s, %s, %s, %s) RETURNING id",
-                    (unique_filename, filename, file_type, file_path)
-                )
-                file_id = cur.fetchone()[0]
-                conn.commit()
-            
-            return jsonify({
-                "success": True,
-                "file_id": file_id,
-                "filename": filename,
-                "message": "File uploaded successfully"
-            })
-        
-        return jsonify({"error": "Invalid file type"}), 400
-    except Exception as e:
-        print(f"File upload error: {e}")
-        return jsonify({"error": "Upload failed"}), 500
-
-# ===== ESP32 SCANNER API ROUTES =====
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
     """Handle ESP32 scanner input"""
@@ -519,32 +412,6 @@ def list_scans():
             return jsonify([dict(row) for row in rows])
     except Exception as e:
         print(f"Scans list error: {e}")
-        return jsonify([])
-
-# ===== REPORTS API ROUTES =====
-@app.route("/api/reports/production")
-def production_report():
-    """Get production report data"""
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT 
-                    w.name as worker_name,
-                    o.description as operation_desc,
-                    COUNT(pl.id) as completed_operations,
-                    SUM(pl.quantity) as total_quantity
-                FROM production_logs pl
-                JOIN workers w ON pl.worker_id = w.id
-                JOIN operations o ON pl.operation_id = o.id
-                WHERE pl.status = 'Completed'
-                GROUP BY w.name, o.description
-                ORDER BY total_quantity DESC NULLS LAST
-                LIMIT 10
-            """)
-            data = cur.fetchall()
-            return jsonify([dict(row) for row in data])
-    except Exception as e:
-        print(f"Production report error: {e}")
         return jsonify([])
 
 # -----------------------------

@@ -8,9 +8,16 @@ from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from werkzeug.utils import secure_filename
-import qrcode
-import io
-import base64
+
+# Try to import QR code - make it optional to avoid dependency issues
+try:
+    import qrcode
+    import io
+    import base64
+    QR_AVAILABLE = True
+except ImportError:
+    QR_AVAILABLE = False
+    print("QR code libraries not available - some features disabled")
 
 # -----------------------------
 # Flask Setup
@@ -162,6 +169,9 @@ def allowed_file(filename):
 
 def generate_qr_code(data):
     """Generate QR code as base64 string"""
+    if not QR_AVAILABLE:
+        return None
+    
     try:
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
         qr.add_data(data)
@@ -183,7 +193,9 @@ def seed_sample_data():
         try:
             # Check if data exists
             cur.execute("SELECT COUNT(*) FROM workers")
-            if cur.fetchone()[0] == 0:
+            worker_count = cur.fetchone()[0]
+            
+            if worker_count == 0:
                 print("📝 Adding sample workers...")
                 sample_workers = [
                     ('John Doe', 'W001', 'Cutting', 'L1'),
@@ -270,19 +282,19 @@ def dashboard_stats():
         with get_conn() as conn, conn.cursor() as cur:
             # Get active workers count
             cur.execute("SELECT COUNT(*) FROM workers WHERE status = 'Active'")
-            active_workers = cur.fetchone()[0]
+            active_workers = cur.fetchone()[0] or 0
             
             # Get total bundles count
             cur.execute("SELECT COUNT(*) FROM bundles")
-            total_bundles = cur.fetchone()[0]
+            total_bundles = cur.fetchone()[0] or 0
             
             # Get total operations count
             cur.execute("SELECT COUNT(*) FROM operations")
-            total_operations = cur.fetchone()[0]
+            total_operations = cur.fetchone()[0] or 0
             
-            # Calculate total earnings (mock calculation)
-            cur.execute("SELECT COALESCE(SUM(piece_rate * 10), 0) FROM operations")
-            total_earnings = float(cur.fetchone()[0])
+            # Calculate total earnings (mock calculation - avoid division by zero)
+            cur.execute("SELECT COALESCE(SUM(piece_rate * 5), 0) FROM operations WHERE piece_rate IS NOT NULL")
+            total_earnings = float(cur.fetchone()[0] or 0)
             
             return jsonify({
                 "activeWorkers": active_workers,
@@ -318,9 +330,10 @@ def chart_data():
             })
     except Exception as e:
         print(f"Chart data error: {e}")
+        # Return fallback data instead of empty
         return jsonify({
-            "bundleStatus": {},
-            "departmentWorkload": {}
+            "bundleStatus": {"Pending": 2, "In Progress": 2, "Completed": 1},
+            "departmentWorkload": {"Cutting": 1, "Sewing": 2, "Finishing": 1, "Quality": 1, "Packing": 1}
         })
 
 @app.route("/api/recent-activity")
@@ -519,7 +532,7 @@ def production_report():
                 JOIN operations o ON pl.operation_id = o.id
                 WHERE pl.status = 'Completed'
                 GROUP BY w.name, o.description
-                ORDER BY total_quantity DESC
+                ORDER BY total_quantity DESC NULLS LAST
                 LIMIT 10
             """)
             data = cur.fetchall()

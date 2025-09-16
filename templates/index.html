@@ -1,3 +1,5 @@
+# templates/index.html (Full Revised Code - Copy and Paste this Entire File)
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -429,20 +431,5 @@
     <p>Processing...</p>
   </div>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
-  <script>
-    document.querySelectorAll('.nav-link').forEach(el => {
-      el.addEventListener('click', e => {
-        e.preventDefault();
-        document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
-        e.currentTarget.classList.add('active');
-        document.querySelectorAll('.section').forEach(section => section.classList.remove('active'));
-        const sectionId = e.currentTarget.getAttribute('data-section');
-        const targetSection = document.getElementById(sectionId);
-        if (targetSection) {
-          targetSection.classList.add('active');
-        }
-      });
-    });
-  </script>
 </body>
 </html>

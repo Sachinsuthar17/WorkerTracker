@@ -1,46 +1,44 @@
-# templatesedit_worker.html (New File - Create and Paste this)
-
 {% extends 'layout.html' %}
 
 {% block content %}
-div class=section-header
-  h1Edit Workerh1
-div
-div class=card
-  div class=card__body
-    form method=post action={{ url_for('edit_worker', worker_id=worker.id) }}
-      div class=form-group
-        labelNamelabel
-        input type=text name=name class=form-control value={{ worker.name }} required
-      div
-      div class=form-group
-        labelToken ID (Cannot Change)label
-        input type=text class=form-control value={{ worker.token_id }} disabled
-      div
-      div class=form-group
-        labelDepartmentlabel
-        select name=department class=form-control required
-          option value={{ worker.department }}{{ worker.department }}option
-          option value=SLEEVESLEEVEoption
-          option value=COLLARCOLLARoption
-          option value=LININGLININGoption
-          option value=BODYBODYoption
-          option value=ASSE-1ASSE-1option
-          option value=ASSE-2ASSE-2option
-          option value=FLAPFLAPoption
-          option value=BACKBACKoption
-        select
-      div
-      div class=form-group
-        labelLinelabel
-        input type=text name=line class=form-control value={{ worker.line }}
-      div
-      div class=form-group
-        labelActivelabel
-        input type=checkbox name=active value=1 {% if worker.active %}checked{% endif %}
-      div
-      button type=submit class=btn btn--primaryUpdate Workerbutton
-    form
-  div
-div
+<div class="section-header">
+  <h1>Edit Worker</h1>
+</div>
+<div class="card">
+  <div class="card__body">
+    <form method="post" action="{{ url_for('edit_worker', worker_id=worker.id) }}">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" class="form-control" name="name" value="{{ worker.name }}" required>
+      </div>
+      <div class="form-group">
+        <label>Token ID (Cannot Change)</label>
+        <input type="text" class="form-control" value="{{ worker.token_id }}" disabled>
+      </div>
+      <div class="form-group">
+        <label>Department</label>
+        <select class="form-control" name="department" required>
+          <option value="{{ worker.department }}">{{ worker.department }}</option>
+          <option value="SLEEVE">SLEEVE</option>
+          <option value="COLLAR">COLLAR</option>
+          <option value="LINING">LINING</option>
+          <option value="BODY">BODY</option>
+          <option value="ASSE-1">ASSE-1</option>
+          <option value="ASSE-2">ASSE-2</option>
+          <option value="FLAP">FLAP</option>
+          <option value="BACK">BACK</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Line</label>
+        <input type="text" class="form-control" name="line" value="{{ worker.line }}">
+      </div>
+      <div class="form-group">
+        <label>Active</label>
+        <input type="checkbox" name="active" value="1" {% if worker.active %}checked{% endif %}>
+      </div>
+      <button type="submit" class="btn btn--primary">Update Worker</button>
+    </form>
+  </div>
+</div>
 {% endblock %}

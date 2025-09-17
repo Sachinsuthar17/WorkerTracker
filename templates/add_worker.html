@@ -1,5 +1,3 @@
-# templates/add_worker.html (New File - Create and Paste this)
-
 {% extends 'layout.html' %}
 
 {% block content %}
@@ -11,15 +9,15 @@
     <form method="post" action="{{ url_for('add_worker') }}">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" name="name" class="form-control" required>
+        <input type="text" class="form-control" name="name" required>
       </div>
       <div class="form-group">
         <label>Token ID</label>
-        <input type="text" name="token_id" class="form-control" required>
+        <input type="text" class="form-control" name="token_id" required>
       </div>
       <div class="form-group">
         <label>Department</label>
-        <select name="department" class="form-control" required>
+        <select class="form-control" name="department" required>
           <option value="">Select Department</option>
           <option value="SLEEVE">SLEEVE</option>
           <option value="COLLAR">COLLAR</option>
@@ -33,7 +31,7 @@
       </div>
       <div class="form-group">
         <label>Line</label>
-        <input type="text" name="line" class="form-control">
+        <input type="text" class="form-control" name="line">
       </div>
       <div class="form-group">
         <label>Active</label>

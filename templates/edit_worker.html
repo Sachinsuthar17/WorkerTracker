@@ -1,51 +1,41 @@
 {% extends 'layout.html' %}
-{% block title %}Edit Worker • Production Tracker{% endblock %}
+{% block title %}Edit Worker • PMS{% endblock %}
 {% block content %}
-  <section class="section active" id="edit-worker">
-    <div class="section-header">
-      <h1>Edit Worker</h1>
-      <div class="header-actions">
-        <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">← Back to Workers</a>
+<section class="section active" id="edit-worker">
+  <div class="section-header">
+    <h1>Edit Worker</h1>
+    <div class="header-actions">
+      <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">← Back to Workers</a>
+    </div>
+  </div>
+
+  <div class="order-card" style="max-width:720px;">
+    <form action="{{ url_for('edit_worker', worker_id=worker.id) }}" method="post" class="grid" style="display:grid; gap:1rem;">
+      <div>
+        <label for="name" class="label">Name</label>
+        <input id="name" name="name" type="text" class="form-control" value="{{ worker.name }}" required>
       </div>
-    </div>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div style="margin-bottom:1rem;">
-          {% for category, message in messages %}
-            <div class="upload-status {{ 'upload-error' if category=='error' else 'upload-success' }}">{{ message }}</div>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
-
-    <div class="order-card" style="max-width:720px;">
-      <form action="{{ url_for('edit_worker', worker_id=worker.id) }}" method="post" class="grid" style="display:grid; gap:1rem;">
-        <div>
-          <label class="label">Token ID (read-only)</label>
-          <input type="text" class="form-control" value="{{ worker.token_id }}" readonly>
-        </div>
-        <div>
-          <label for="name" class="label">Name</label>
-          <input id="name" name="name" type="text" class="form-control" value="{{ worker.name }}" required>
-        </div>
-        <div>
-          <label for="department" class="label">Department</label>
-          <input id="department" name="department" type="text" class="form-control" value="{{ worker.department }}" required>
-        </div>
-        <div>
-          <label for="line" class="label">Line</label>
-          <input id="line" name="line" type="text" class="form-control" value="{{ worker.line or '' }}">
-        </div>
-        <div style="display:flex;align-items:center;gap:.5rem;">
-          <input id="active" name="active" type="checkbox" {% if worker.active %}checked{% endif %}>
-          <label for="active">Active</label>
-        </div>
-        <div style="margin-top:1rem;display:flex;gap:.75rem;">
-          <button class="btn btn--primary" type="submit">Update</button>
-          <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">Cancel</a>
-        </div>
-      </form>
-    </div>
-  </section>
+      <div>
+        <label class="label">Token ID</label>
+        <input type="text" class="form-control" value="{{ worker.token_id }}" disabled>
+      </div>
+      <div>
+        <label for="department" class="label">Department</label>
+        <input id="department" name="department" type="text" class="form-control" value="{{ worker.department }}" required>
+      </div>
+      <div>
+        <label for="line" class="label">Line</label>
+        <input id="line" name="line" type="text" class="form-control" value="{{ worker.line or '' }}">
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem;">
+        <input id="active" name="active" type="checkbox" {% if worker.active %}checked{% endif %}>
+        <label for="active">Active</label>
+      </div>
+      <div style="margin-top:1rem;display:flex;gap:.75rem;">
+        <button class="btn btn--primary" type="submit">Update</button>
+        <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
 {% endblock %}

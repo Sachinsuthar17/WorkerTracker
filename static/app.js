@@ -1,78 +1,75 @@
-/* Production Management System - Frontend Logic (aligned) */
-
+/* PMS Frontend (robust, no Jinja in static) */
 (() => {
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
 
   let autoRefreshTimer = null;
   let charts = { bundle: null, department: null };
 
   document.addEventListener("DOMContentLoaded", () => {
-    // Sidebar toggle (works on all pages)
+    // Sidebar toggle on all pages
     const sidebar = $("#sidebar");
     const sidebarToggle = $("#sidebarToggle");
     on(sidebarToggle, "click", () => sidebar?.classList.toggle("active"));
 
-    // Only wire SPA behavior if index.html (has sections)
-    const sections = $$(".section");
-    if (sections.length && document.body.dataset.spa === "true") {
-      // Sidebar nav links still point to index#section—support in-page switching too
+    // SPA only on index.html (body has data-spa="true" and there are .section nodes)
+    const isSPA = document.body.dataset.spa === "true";
+    const hasSections = $$(".section").length > 0;
+
+    if (isSPA && hasSections) {
+      // In-page nav switching: only preventDefault when we are already on index (path "/")
       $$(".nav-item").forEach(item => {
         on(item, "click", (e) => {
-          // if we're already on index page, prevent full reload and switch section
-          if (location.pathname === "{{ url_for('index') }}") {
+          // If link is to "/" (index) and has a hash, we can SPA-toggle
+          const href = item.getAttribute("href") || "";
+          const url = new URL(href, location.origin);
+          const pointsToIndex = url.pathname === "/";     // do NOT use Jinja here
+          const target = item.dataset.section;
+
+          if (pointsToIndex && target) {
             e.preventDefault();
-            const target = item.dataset.section;
-            if (target) {
-              if (location.hash !== `#${target}`) {
-                location.hash = target;
-              } else {
-                activateSection(target);
-                loadSectionData(target);
-              }
+            if (location.hash !== `#${target}`) {
+              location.hash = target; // triggers hashchange below
+            } else {
+              activateSection(target);
+              loadSectionData(target);
             }
             if (window.innerWidth <= 768) sidebar?.classList.remove("active");
           }
         });
       });
 
-      // Initial activation + data
+      // initial state
       activateSectionFromHash();
       loadSectionData(currentSectionId());
 
-      // On hash change
+      // hash routing
       window.addEventListener("hashchange", () => {
         activateSectionFromHash();
         loadSectionData(currentSectionId());
       });
-    }
 
-    // Wire section-specific controls (guarded)
-    wireDashboardControls();
-    wireWorkerControls();
-    wireOperationControls();
-    wireScanDemo();
-
-    // If on index, load initial data for visible sections
-    if (document.body.dataset.spa === "true") {
+      // initial data loads (index only)
       loadDashboard();
       loadWorkers();
       loadOperations();
       loadBundles();
       loadProductionOrder();
+    } else {
+      // Non-SPA pages (add/edit). No in-page toggling; sidebar links navigate to index sections.
     }
+
+    // Wire page controls (guards inside functions make them safe on any page)
+    wireDashboardControls();
+    wireWorkerControls();
+    wireOperationControls();
+    wireScanDemo();
   });
 
   // ---------- SPA helpers ----------
-  function currentSectionId() {
-    return (location.hash || "#dashboard").replace("#", "");
-  }
-
-  function activateSectionFromHash() {
-    activateSection(currentSectionId());
-  }
-
+  function currentSectionId() { return (location.hash || "#dashboard").replace("#", ""); }
+  function activateSectionFromHash() { activateSection(currentSectionId()); }
   function activateSection(id) {
     const sections = $$(".section");
     if (!sections.length) return;
@@ -82,11 +79,10 @@
     activeNav?.classList.add("active");
     manageAutoRefresh(id);
   }
-
-  function manageAutoRefresh(sectionId) {
+  function manageAutoRefresh(id) {
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
     autoRefreshTimer = null;
-    if (sectionId === "dashboard") {
+    if (id === "dashboard") {
       autoRefreshTimer = setInterval(() => {
         loadDashboardStats();
         loadRecentActivity();
@@ -94,7 +90,6 @@
       }, 30000);
     }
   }
-
   function loadSectionData(id) {
     switch (id) {
       case "dashboard": loadDashboard(); break;
@@ -102,7 +97,6 @@
       case "operations": loadOperations(); break;
       case "bundles": loadBundles(); break;
       case "production-order": loadProductionOrder(); break;
-      default: break;
     }
   }
 
@@ -134,10 +128,8 @@
       pulseKPI(["#activeWorkers", "#totalBundles", "#totalOperations", "#totalEarnings"]);
     } catch (e) {
       console.error("dashboard-stats error", e);
-      setText("#activeWorkers", "0");
-      setText("#totalBundles", "0");
-      setText("#totalOperations", "0");
-      setText("#totalEarnings", "₹0.00");
+      setText("#activeWorkers", "0"); setText("#totalBundles", "0");
+      setText("#totalOperations", "0"); setText("#totalEarnings", "₹0.00");
     }
   }
 
@@ -155,10 +147,10 @@
   }
 
   function updateBundleChart(map) {
-    const el = $("#bundleStatusChart") || $("#bundleChart");
-    if (!el || !window.Chart) return;
+    const canvas = $("#bundleStatusChart") || $("#bundleChart");
+    if (!canvas || !window.Chart) return;
     if (charts.bundle) charts.bundle.destroy();
-    charts.bundle = new Chart(el, {
+    charts.bundle = new Chart(canvas, {
       type: "doughnut",
       data: {
         labels: Object.keys(map),
@@ -169,10 +161,10 @@
   }
 
   function updateDepartmentChart(map) {
-    const el = $("#departmentChart");
-    if (!el || !window.Chart) return;
+    const canvas = $("#departmentChart");
+    if (!canvas || !window.Chart) return;
     if (charts.department) charts.department.destroy();
-    charts.department = new Chart(el, {
+    charts.department = new Chart(canvas, {
       type: "bar",
       data: {
         labels: Object.keys(map),
@@ -213,16 +205,7 @@
     const el = $("#lastUpdated");
     if (el) el.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
   }
-
-  function pulseKPI(selectors) {
-    selectors.forEach(sel => {
-      const v = $(sel);
-      const card = v?.closest(".kpi-card");
-      if (!card) return;
-      card.classList.add("pulse");
-      setTimeout(() => card.classList.remove("pulse"), 900);
-    });
-  }
+  function pulseKPI(ids){ ids.forEach(sel => { const v = $(sel); const card = v?.closest(".kpi-card"); if (!card) return; card.classList.add("pulse"); setTimeout(()=>card.classList.remove("pulse"), 900); }); }
 
   // ---------- Workers ----------
   function wireWorkerControls() {
@@ -246,11 +229,8 @@
         tbody.innerHTML = `<tr><td colspan="7" class="loading">No workers found</td></tr>`;
         return;
       }
-
       tbody.innerHTML = data.map(w => {
-        const badge = w.active
-          ? `<span class="status-badge status-active">ACTIVE</span>`
-          : `<span class="status-badge status-idle">INACTIVE</span>`;
+        const badge = w.active ? `<span class="status-badge status-active">ACTIVE</span>` : `<span class="status-badge status-idle">INACTIVE</span>`;
         const qr = w.qrcode_path ? `<img src="${encodeURI(`/static/${w.qrcode_path}`)}" width="40" alt="QR">` : "No QR";
         return `
           <tr>
@@ -277,7 +257,6 @@
   function wireOperationControls() {
     on($("#operationSearch"), "input", debounce(loadOperations, 300));
   }
-
   async function loadOperations() {
     const tbody = $("#operationsTable");
     if (!tbody) return;
@@ -286,12 +265,10 @@
       const qs = new URLSearchParams(search ? { search } : {});
       const res = await fetch(`/api/operations?${qs.toString()}`);
       const rows = await res.json();
-
       if (!rows.length) {
         tbody.innerHTML = `<tr><td colspan="7" class="loading">No operations found</td></tr>`;
         return;
       }
-
       tbody.innerHTML = rows.map(op => `
         <tr>
           <td>${op.seq_no ?? "-"}</td>
@@ -356,28 +333,19 @@
       elBuyer.textContent = order.buyer || "N/A";
     } catch (e) {
       console.error("production-order error", e);
-      elNo.textContent = "No order found";
-      elStyle.textContent = "N/A";
-      elQty.textContent = "N/A";
-      elBuyer.textContent = "N/A";
+      elNo.textContent = "No order found"; elStyle.textContent = "N/A"; elQty.textContent = "N/A"; elBuyer.textContent = "N/A";
     }
   }
 
-  // ---------- Scanner (UI demo) ----------
+  // ---------- Scanner demo ----------
   function wireScanDemo() {
-    const startBtn = $("#startScan");
-    const stopBtn = $("#stopScan");
-    const resetBtn = $("#resetScan");
-
+    const startBtn = $("#startScan"), stopBtn = $("#stopScan"), resetBtn = $("#resetScan");
     let scanning = false, timer = null;
 
     on(startBtn, "click", () => {
       if (scanning) return;
-      scanning = true;
-      setScanStatus("Scanning...");
-      startBtn.disabled = true;
-      if (stopBtn) stopBtn.disabled = false;
-
+      scanning = true; setScanStatus("Scanning...");
+      if (startBtn) startBtn.disabled = true; if (stopBtn) stopBtn.disabled = false;
       timer = setInterval(() => {
         const code = generateRandomCode();
         displayScanResult(code);
@@ -387,53 +355,28 @@
 
     on(stopBtn, "click", stop);
     on(resetBtn, "click", () => {
-      stop();
-      setScanStatus("Ready to Scan");
-      const list = $("#recentScans");
-      const result = $("#scanResult");
+      stop(); setScanStatus("Ready to Scan");
+      const list = $("#recentScans"); const result = $("#scanResult");
       if (list) list.innerHTML = '<div class="scan-item">No recent scans</div>';
       if (result) result.textContent = "";
     });
 
     function stop() {
       if (!scanning) return;
-      scanning = false;
-      clearInterval(timer);
-      timer = null;
-      const start = $("#startScan");
-      const stopB = $("#stopScan");
-      if (start) start.disabled = false;
-      if (stopB) stopB.disabled = true;
+      scanning = false; clearInterval(timer); timer = null;
+      if (startBtn) startBtn.disabled = false; if (stopBtn) stopBtn.disabled = true;
       setScanStatus("Stopped");
     }
   }
-
-  function setScanStatus(txt) { const el = $("#scannerStatus"); if (el) el.textContent = txt; }
-  function displayScanResult(code) {
-    const el = $("#scanResult");
-    if (el) { el.textContent = code; el.style.animation = "slideUp 0.5s ease-in-out"; setTimeout(() => (el.style.animation = ""), 600); }
-  }
-  function prependScan(code) {
-    const list = $("#recentScans");
-    if (list) list.insertAdjacentHTML("afterbegin",
-      `<div class="scan-item"><span class="scan-code">${escapeHTML(code)}</span><span class="scan-time">${new Date().toLocaleTimeString()}</span></div>`
-    );
-  }
-  function generateRandomCode() {
-    const prefixes = ["W", "B", "O"];
-    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const number = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
-    return `${prefix}${number}`;
-  }
+  function setScanStatus(t){ const el=$("#scannerStatus"); if(el) el.textContent=t; }
+  function displayScanResult(code){ const el=$("#scanResult"); if(el){ el.textContent=code; el.style.animation="slideUp 0.5s"; setTimeout(()=>el.style.animation="",600);} }
+  function prependScan(code){ const list=$("#recentScans"); if(list){ list.insertAdjacentHTML("afterbegin",`<div class="scan-item"><span class="scan-code">${escapeHTML(code)}</span><span class="scan-time">${new Date().toLocaleTimeString()}</span></div>`);} }
+  function generateRandomCode(){ const p=["W","B","O"]; const pre=p[Math.floor(Math.random()*p.length)]; const n=String(Math.floor(Math.random()*999)+1).padStart(3,"0"); return `${pre}${n}`; }
 
   // ---------- utils ----------
-  function debounce(fn, wait = 300) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn.apply(null, a), wait); }; }
-  function setText(sel, val) { const el = $(sel); if (el) el.textContent = val; }
-  function formatDate(s) { if (!s) return "N/A"; const d = new Date(s); return isNaN(d) ? s : d.toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric"}); }
-  function formatTime(s) {
-    if (!s) return "N/A"; const d = new Date(s); const now = new Date(); const diffMin = Math.floor((now - d) / 60000);
-    if (diffMin < 1) return "Just now"; if (diffMin < 60) return `${diffMin}m ago`; const h = Math.floor(diffMin / 60);
-    if (h < 24) return `${h}h ago`; const days = Math.floor(h / 24); return `${days}d ago`;
-  }
-  function escapeHTML(str) { return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
+  function debounce(fn, w=300){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn.apply(null,a),w); }; }
+  function setText(sel, val){ const el=$(sel); if(el) el.textContent=val; }
+  function formatDate(s){ if(!s) return "N/A"; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric"}); }
+  function formatTime(s){ if(!s) return "N/A"; const d=new Date(s), n=new Date(); const m=Math.floor((n-d)/60000); if(m<1) return "Just now"; if(m<60) return `${m}m ago`; const h=Math.floor(m/60); if(h<24) return `${h}h ago`; const dd=Math.floor(h/24); return `${dd}d ago`; }
+  function escapeHTML(str){ return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
 })();

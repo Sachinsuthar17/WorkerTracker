@@ -1,34 +1,51 @@
 {% extends 'layout.html' %}
-
+{% block title %}Add Worker • Production Tracker{% endblock %}
 {% block content %}
-<div class="section-header">
-  <h1>Add Worker</h1>
-</div>
-<div class="card">
-  <div class="card__body">
-    <form method="post" action="{{ url_for('add_worker') }}">
-      <div class="form-group">
-        <label>Name</label>
-        <input type="text" name="name" class="form-control" required>
+  <section class="section active" id="add-worker">
+    <div class="section-header">
+      <h1>Add Worker</h1>
+      <div class="header-actions">
+        <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">← Back to Workers</a>
       </div>
-      <div class="form-group">
-        <label>Token ID</label>
-        <input type="text" name="token_id" class="form-control" required>
-      </div>
-      <div class="form-group">
-        <label>Department</label>
-        <input type="text" name="department" class="form-control" required>
-      </div>
-      <div class="form-group">
-        <label>Line</label>
-        <input type="text" name="line" class="form-control">
-      </div>
-      <div class="form-group">
-        <label>Active</label>
-        <input type="checkbox" name="active" value="1" checked>
-      </div>
-      <button type="submit" class="btn btn--primary">Add</button>
-    </form>
-  </div>
-</div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div style="margin-bottom:1rem;">
+          {% for category, message in messages %}
+            <div class="upload-status {{ 'upload-error' if category=='error' else 'upload-success' }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="order-card" style="max-width:720px;">
+      <form action="{{ url_for('add_worker') }}" method="post" class="grid" style="display:grid; gap:1rem;">
+        <div>
+          <label for="name" class="label">Name</label>
+          <input id="name" name="name" type="text" class="form-control" placeholder="Worker name" required>
+        </div>
+        <div>
+          <label for="token_id" class="label">Token ID</label>
+          <input id="token_id" name="token_id" type="text" class="form-control" placeholder="Unique token" required>
+        </div>
+        <div>
+          <label for="department" class="label">Department</label>
+          <input id="department" name="department" type="text" class="form-control" placeholder="Cutting / Sewing / …" required>
+        </div>
+        <div>
+          <label for="line" class="label">Line</label>
+          <input id="line" name="line" type="text" class="form-control" placeholder="Line ID (optional)">
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+          <input id="active" name="active" type="checkbox" checked>
+          <label for="active">Active</label>
+        </div>
+        <div style="margin-top:1rem;display:flex;gap:.75rem;">
+          <button class="btn btn--primary" type="submit">Save</button>
+          <a class="btn btn--secondary" href="{{ url_for('index') }}#workers">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
 {% endblock %}

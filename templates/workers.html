@@ -1,6 +1,74 @@
+# templates/workers.html (Full Revised Code - Copy and Paste this Entire File)
+
 {% extends 'layout.html' %}
 
 {% block content %}
-<h1>Workers Page</h1>
-<p>This is placeholder content for the Workers page.</p>
+<div class="section-header">
+  <h1>Worker Management</h1>
+  <div class="header-actions">
+    <a href="{{ url_for('add_worker') }}" class="btn btn--primary">+ Add Worker</a>
+    <form action="{{ url_for('upload_workers') }}" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".xlsx" required>
+      <button type="submit" class="btn btn--secondary">Upload Excel</button>
+    </form>
+  </div>
+</div>
+<div class="card">
+  <div class="card__body">
+    <div class="table-controls">
+      <input type="text" class="form-control" id="workerSearch" placeholder="Search workers...">
+      <select class="form-control" id="departmentFilter">
+        <option value="">All Departments</option>
+        <option value="SLEEVE">SLEEVE</option>
+        <option value="COLLAR">COLLAR</option>
+        <option value="LINING">LINING</option>
+        <option value="BODY">BODY</option>
+        <option value="ASSE-1">ASSE-1</option>
+        <option value="ASSE-2">ASSE-2</option>
+        <option value="FLAP">FLAP</option>
+        <option value="BACK">BACK</option>
+      </select>
+    </div>
+    <div class="table-container">
+      <table id="workersTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Token ID</th>
+            <th>Department</th>
+            <th>Line</th>
+            <th>Status</th>
+            <th>QR Code</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="workersTableBody">
+          {% for worker in workers %}
+          <tr>
+            <td>{{ worker.name }}</td>
+            <td>{{ worker.token_id }}</td>
+            <td><span class="department-tag">{{ worker.department }}</span></td>
+            <td>{{ worker.line }}</td>
+            <td><span class="status-badge status-{{ worker.status.lower() }}">{{ worker.status }}</span></td>
+            <td>
+              {% if worker.qr_png %}
+              <img src="{{ url_for('static', filename=worker.qr_png) }}" width="40" alt="QR Code">
+              <a href="{{ url_for('download_qr', worker_id=worker.id) }}" class="btn btn-sm btn--outline">Download QR</a>
+              {% else %}
+              No QR
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('edit_worker', worker_id=worker.id) }}" class="btn btn-sm btn--secondary">Edit</a>
+              <form action="{{ url_for('delete_worker', worker_id=worker.id) }}" method="post" style="display:inline;">
+                <button type="submit" class="btn btn-sm btn--outline" onclick="return confirm('Are you sure?');">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

@@ -22,8 +22,27 @@ document.addEventListener("DOMContentLoaded", () => {
       sections.forEach(sec => {
         sec.classList.toggle("active", sec.id === target);
       });
+      // also update hash so deep-links work
+      if (target) location.hash = target;
     });
   });
+
+  // NEW: allow deep-links like /#workers and the sidebar links from add/edit pages
+  function activateSectionFromHash() {
+    const hash = (location.hash || "#dashboard").replace("#", "");
+    const target = document.getElementById(hash);
+    if (!target) return;
+
+    // switch visible section
+    sections.forEach(sec => sec.classList.toggle("active", sec === target));
+
+    // update left nav state if present
+    document.querySelectorAll('.nav-item').forEach(a => a.classList.remove('active'));
+    const match = document.querySelector(`.nav-item[data-section="${hash}"]`);
+    if (match) match.classList.add('active');
+  }
+
+  window.addEventListener("hashchange", activateSectionFromHash);
 
   // ====== DASHBOARD ======
   async function loadDashboard() {
@@ -31,7 +50,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch("/api/dashboard-stats");
       const data = await res.json();
 
-      // update KPI cards
       if (document.getElementById("activeWorkers"))
         document.getElementById("activeWorkers").textContent = data.activeWorkers;
       if (document.getElementById("totalBundles"))
@@ -41,9 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (document.getElementById("totalEarnings"))
         document.getElementById("totalEarnings").textContent = data.totalEarnings.toFixed(2);
 
-      // load charts
       loadCharts();
-      // load activity
       loadRecentActivity();
     } catch (err) {
       console.error("dashboard load error", err);
@@ -61,12 +77,7 @@ document.addEventListener("DOMContentLoaded", () => {
           type: "doughnut",
           data: {
             labels: Object.keys(data.bundleStatus),
-            datasets: [
-              {
-                data: Object.values(data.bundleStatus),
-                backgroundColor: ["#3b82f6", "#f59e0b", "#10b981", "#ef4444"]
-              }
-            ]
+            datasets: [{ data: Object.values(data.bundleStatus), backgroundColor: ["#3b82f6", "#f59e0b", "#10b981", "#ef4444"] }]
           },
           options: { responsive: true, plugins: { legend: { position: "bottom" } } }
         });
@@ -78,18 +89,9 @@ document.addEventListener("DOMContentLoaded", () => {
           type: "bar",
           data: {
             labels: Object.keys(data.departmentWorkload),
-            datasets: [
-              {
-                label: "Workers",
-                data: Object.values(data.departmentWorkload),
-                backgroundColor: "#8b5cf6"
-              }
-            ]
+            datasets: [{ label: "Workers", data: Object.values(data.departmentWorkload), backgroundColor: "#8b5cf6" }]
           },
-          options: {
-            responsive: true,
-            scales: { y: { beginAtZero: true } }
-          }
+          options: { responsive: true, scales: { y: { beginAtZero: true } } }
         });
       }
     } catch (err) {
@@ -240,27 +242,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ====== FILE UPLOAD ======
-  const fileInput = document.querySelector("#fileUploadInput");
-  const uploadForm = document.querySelector("#fileUploadForm");
-  const uploadStatus = document.querySelector("#uploadStatus");
-
-  uploadForm?.addEventListener("submit", e => {
-    if (!fileInput.value) {
-      e.preventDefault();
-      uploadStatus.textContent = "Please select a file.";
-      uploadStatus.className = "upload-status upload-error";
-    } else {
-      uploadStatus.textContent = "Uploading...";
-      uploadStatus.className = "upload-status";
-    }
-  });
-
-  // ====== ESP32 SCANNER (demo only) ======
+  // ====== simple scan demo (unchanged) ======
   const scanBtn = document.getElementById("simulateScanBtn");
   const scanResult = document.getElementById("scanResult");
   const scansList = document.getElementById("scansList");
-
   scanBtn?.addEventListener("click", () => {
     const code = `CODE-${Math.floor(Math.random() * 10000)}`;
     const time = new Date().toLocaleTimeString();
@@ -272,9 +257,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ====== INIT LOAD ======
+  // perform data loads once
   loadDashboard();
   loadWorkers();
   loadOperations();
   loadBundles();
   loadProductionOrder();
+
+  // activate section based on current hash
+  activateSectionFromHash();
 });

@@ -2,72 +2,67 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}Production Tracker{% endblock %}</title>
-  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}Production Management System{% endblock %}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body data-color-scheme="dark">
-  <div class="dashboard">
-    <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Toggle menu">
-      <i class="fas fa-bars"></i>
-    </button>
-
-    <!-- NOTE: All links now go to index + a hash. No more url_for('workers') etc. -->
-    <nav class="sidebar" id="sidebar" aria-label="Main navigation">
+<body data-color-scheme="dark" {% if spa %}data-spa="true"{% endif %}>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <div class="logo">
-          <i class="fas fa-industry"></i>
-          <span>Production Tracker</span>
-        </div>
+        <div class="logo"><h2>PMS</h2></div>
+        <button class="sidebar-toggle" id="sidebarToggle">
+          <span></span><span></span><span></span>
+        </button>
       </div>
-      <ul class="sidebar-menu">
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#dashboard" class="menu-link">
-            <i class="fas fa-chart-line"></i><span>Dashboard</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#workers" class="menu-link">
-            <i class="fas fa-users"></i><span>Workers</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#operations" class="menu-link">
-            <i class="fas fa-cogs"></i><span>Operations</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#bundles" class="menu-link">
-            <i class="fas fa-boxes"></i><span>Bundles</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#production-order" class="menu-link">
-            <i class="fas fa-clipboard-list"></i><span>Production Order</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#file-upload" class="menu-link">
-            <i class="fas fa-upload"></i><span>File Upload</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#scanner" class="menu-link">
-            <i class="fas fa-barcode"></i><span>ESP32 Scanner</span>
-          </a>
-        </li>
-        <li class="menu-item">
-          <a href="{{ url_for('index') }}#reports" class="menu-link">
-            <i class="fas fa-chart-bar"></i><span>Reports</span>
-          </a>
-        </li>
-      </ul>
-    </nav>
 
-    <main class="main-content">{% block content %}{% endblock %}</main>
+      <!-- IMPORTANT: these links always point to index + hash.
+           On the index page we enable SPA behavior via data-spa="true". -->
+      <nav class="sidebar-nav">
+        <a href="{{ url_for('index') }}#dashboard" class="nav-item" data-section="dashboard">
+          <span class="nav-icon">📊</span><span class="nav-text">Dashboard</span>
+        </a>
+        <a href="{{ url_for('index') }}#workers" class="nav-item" data-section="workers">
+          <span class="nav-icon">👥</span><span class="nav-text">Worker Management</span>
+        </a>
+        <a href="{{ url_for('index') }}#operations" class="nav-item" data-section="operations">
+          <span class="nav-icon">⚙️</span><span class="nav-text">Operations Management</span>
+        </a>
+        <a href="{{ url_for('index') }}#bundles" class="nav-item" data-section="bundles">
+          <span class="nav-icon">📦</span><span class="nav-text">Bundle Management</span>
+        </a>
+        <a href="{{ url_for('index') }}#production-order" class="nav-item" data-section="production-order">
+          <span class="nav-icon">📋</span><span class="nav-text">Production Order</span>
+        </a>
+        <a href="{{ url_for('index') }}#file-upload" class="nav-item" data-section="file-upload">
+          <span class="nav-icon">📁</span><span class="nav-text">File Upload</span>
+        </a>
+        <a href="{{ url_for('index') }}#scanner" class="nav-item" data-section="scanner">
+          <span class="nav-icon">📱</span><span class="nav-text">ESP32 Scanner</span>
+        </a>
+        <a href="{{ url_for('index') }}#reports" class="nav-item" data-section="reports">
+          <span class="nav-icon">📈</span><span class="nav-text">Reports</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div style="margin-bottom:1rem;">
+            {% for category, message in messages %}
+              <div class="upload-status {{ 'upload-error' if category=='error' else 'upload-success' }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </main>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

@@ -84,6 +84,13 @@
                             <option value="Active">Active</option>
                             <option value="Idle">Idle</option>
                         </select>
+
+                        <!-- New controls -->
+                        <a href="{{ url_for('add_worker') }}" class="btn btn--primary btn-sm">+ Add Worker</a>
+                        <form action="{{ url_for('upload_workers') }}" method="post" enctype="multipart/form-data" style="display:inline;">
+                            <input type="file" name="file" accept=".xlsx" required class="form-control btn-sm" style="display:inline-block;">
+                            <button type="submit" class="btn btn--outline btn-sm">Bulk Upload Excel</button>
+                        </form>
                     </div>
                 </div>
                 <div class="table-container">

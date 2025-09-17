@@ -1,156 +1,102 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Production Management System</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production Management System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="app">
-        <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo">
-                    <h2>PMS</h2>
-                </div>
-                <button class="sidebar-toggle" id="sidebarToggle">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </button>
-            </div>
-            <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" data-section="dashboard">
-                    <span class="nav-icon">📊</span>
-                    <span class="nav-text">Dashboard</span>
-                </a>
-                <a href="#" class="nav-item" data-section="workers">
-                    <span class="nav-icon">👥</span>
-                    <span class="nav-text">Worker Management</span>
-                </a>
-                <a href="#" class="nav-item" data-section="operations">
-                    <span class="nav-icon">⚙️</span>
-                    <span class="nav-text">Operations Management</span>
-                </a>
-                <a href="#" class="nav-item" data-section="bundles">
-                    <span class="nav-icon">📦</span>
-                    <span class="nav-text">Bundle Management</span>
-                </a>
-                <a href="#" class="nav-item" data-section="production-order">
-                    <span class="nav-icon">📋</span>
-                    <span class="nav-text">Production Order</span>
-                </a>
-                <a href="#" class="nav-item" data-section="file-upload">
-                    <span class="nav-icon">📁</span>
-                    <span class="nav-text">File Upload</span>
-                </a>
-                <a href="#" class="nav-item" data-section="scanner">
-                    <span class="nav-icon">📱</span>
-                    <span class="nav-text">ESP32 Scanner</span>
-                </a>
-                <a href="#" class="nav-item" data-section="reports">
-                    <span class="nav-icon">📈</span>
-                    <span class="nav-text">Reports</span>
-                </a>
-            </nav>
-        </aside>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo"><h2>PMS</h2></div>
+        <button class="sidebar-toggle" id="sidebarToggle">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-section="dashboard">📊 <span class="nav-text">Dashboard</span></a>
+        <a href="#" class="nav-item" data-section="workers">👥 <span class="nav-text">Workers</span></a>
+        <a href="#" class="nav-item" data-section="operations">⚙️ <span class="nav-text">Operations</span></a>
+        <a href="#" class="nav-item" data-section="bundles">📦 <span class="nav-text">Bundles</span></a>
+        <a href="#" class="nav-item" data-section="production-order">📋 <span class="nav-text">Production Order</span></a>
+        <a href="#" class="nav-item" data-section="file-upload">📁 <span class="nav-text">File Upload</span></a>
+        <a href="#" class="nav-item" data-section="scanner">📱 <span class="nav-text">ESP32 Scanner</span></a>
+        <a href="#" class="nav-item" data-section="reports">📈 <span class="nav-text">Reports</span></a>
+      </nav>
+    </aside>
 
-        <!-- Main Content -->
-        <main class="main-content" id="mainContent">
-            <!-- Dashboard Section -->
-            <section class="section active" id="dashboard">
-                <!-- ... unchanged ... -->
-            </section>
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+      <!-- Dashboard Section -->
+      <section class="section active" id="dashboard">
+        <div class="section-header">
+          <h1>Dashboard</h1>
+          <button id="refreshBtn" class="btn btn--primary btn-sm">Refresh</button>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi-card"><div class="kpi-icon">👥</div><div class="kpi-content"><div id="activeWorkers" class="kpi-value">0</div><div class="kpi-label">Active Workers</div></div></div>
+          <div class="kpi-card"><div class="kpi-icon">📦</div><div class="kpi-content"><div id="totalBundles" class="kpi-value">0</div><div class="kpi-label">Bundles</div></div></div>
+          <div class="kpi-card"><div class="kpi-icon">⚙️</div><div class="kpi-content"><div id="totalOperations" class="kpi-value">0</div><div class="kpi-label">Operations</div></div></div>
+          <div class="kpi-card"><div class="kpi-icon">💰</div><div class="kpi-content"><div id="totalEarnings" class="kpi-value">₹0.00</div><div class="kpi-label">Total Earnings</div></div></div>
+        </div>
+        <div class="charts-grid">
+          <div class="chart-card"><h3>Bundle Status</h3><div class="chart-container"><canvas id="bundleStatusChart"></canvas></div></div>
+          <div class="chart-card"><h3>Department Workload</h3><div class="chart-container"><canvas id="departmentChart"></canvas></div></div>
+        </div>
+        <div class="activity-card">
+          <h3>Recent Activity</h3>
+          <div id="activityFeed" class="activity-feed"></div>
+          <div id="lastUpdated" class="last-updated">Last updated: -</div>
+        </div>
+      </section>
 
-            <!-- Worker Management Section -->
-            <section class="section" id="workers">
-                <div class="section-header">
-                    <h1>Worker Management</h1>
-                    <div class="header-controls">
-                        <input type="text" class="form-control search-input" id="workerSearch" placeholder="Search workers...">
-                        <select class="form-control" id="departmentFilter">
-                            <option value="">All Departments</option>
-                            <option value="Cutting">Cutting</option>
-                            <option value="Sewing">Sewing</option>
-                            <option value="Finishing">Finishing</option>
-                            <option value="Quality">Quality</option>
-                            <option value="Packing">Packing</option>
-                        </select>
-                        <select class="form-control" id="statusFilter">
-                            <option value="">All Status</option>
-                            <option value="Active">Active</option>
-                            <option value="Idle">Idle</option>
-                        </select>
+      <!-- Worker Management Section -->
+      <section class="section" id="workers">
+        <div class="section-header">
+          <h1>Worker Management</h1>
+          <div class="header-controls">
+            <input type="text" id="workerSearch" placeholder="Search workers..." class="form-control search-input" />
+            <select id="departmentFilter" class="form-control">
+              <option value="">All Departments</option>
+              <option value="Cutting">Cutting</option>
+              <option value="Sewing">Sewing</option>
+              <option value="Finishing">Finishing</option>
+              <option value="Quality">Quality</option>
+              <option value="Packing">Packing</option>
+            </select>
+            <select id="statusFilter" class="form-control">
+              <option value="">All Status</option>
+              <option value="Active">Active</option>
+              <option value="Idle">Idle</option>
+            </select>
+            <a href="{{ url_for('add_worker') }}" class="btn btn--primary btn-sm">+ Add Worker</a>
+            <form action="{{ url_for('upload_workers') }}" method="post" enctype="multipart/form-data" style="display:inline;">
+              <input type="file" name="file" accept=".xlsx" required class="form-control btn-sm" style="display:inline-block;">
+              <button type="submit" class="btn btn--outline btn-sm">Bulk Upload Excel</button>
+            </form>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Name</th><th>Token ID</th><th>Department</th><th>Line</th><th>Status</th><th>QR Code</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="workersTable">
+              <tr><td colspan="7" class="loading">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-                        <!-- New controls -->
-                        <a href="{{ url_for('add_worker') }}" class="btn btn--primary btn-sm">+ Add Worker</a>
-                        <form action="{{ url_for('upload_workers') }}" method="post" enctype="multipart/form-data" style="display:inline;">
-                            <input type="file" name="file" accept=".xlsx" required class="form-control btn-sm" style="display:inline-block;">
-                            <button type="submit" class="btn btn--outline btn-sm">Bulk Upload Excel</button>
-                        </form>
-                    </div>
-                </div>
-                <div class="table-container">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Token ID</th>
-                                <th>Department</th>
-                                <th>Line</th>
-                                <th>Status</th>
-                                <th>QR Code</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="workersTable">
-                            {% for worker in workers %}
-                            <tr>
-                                <td>{{ worker.name }}</td>
-                                <td>{{ worker.token_id }}</td>
-                                <td>{{ worker.department }}</td>
-                                <td>{{ worker.line or 'N/A' }}</td>
-                                <td>
-                                    {% if worker.active %}
-                                        <span class="status active">ACTIVE</span>
-                                    {% else %}
-                                        <span class="status inactive">INACTIVE</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if worker.qrcode_path %}
-                                        <img src="{{ url_for('static', filename=worker.qrcode_path) }}" width="40" alt="QR">
-                                    {% else %}
-                                        No QR
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    <a href="{{ url_for('edit_worker', worker_id=worker.id) }}" class="btn btn--primary btn-sm">Edit</a>
-                                    <a href="{{ url_for('delete_worker', worker_id=worker.id) }}" class="btn btn--secondary btn-sm"
-                                       onclick="return confirm('Are you sure you want to delete this worker?');">Delete</a>
-                                    {% if worker.qrcode_path %}
-                                        <a href="{{ url_for('download_qr', worker_id=worker.id) }}" class="btn btn--outline btn-sm">Download QR</a>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="7" class="loading">No workers found</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+      <!-- Other sections (operations, bundles, production-order, etc.) go here -->
+    </main>
+  </div>
 
-            <!-- Operations, Bundles, Production, File Upload, Scanner, Reports -->
-            <!-- ... unchanged ... -->
-        </main>
-    </div>
-
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

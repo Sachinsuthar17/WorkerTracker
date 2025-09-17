@@ -184,6 +184,11 @@ def index():
         workers = conn.execute("SELECT * FROM workers ORDER BY created_at DESC").fetchall()
     return render_template("index.html", workers=workers)
 
+# some templates link to `url_for('dashboard')` (e.g., layout.html)
+@app.get("/dashboard")
+def dashboard():
+    return redirect(url_for("index"))
+
 
 # -------------------------------------------------------------------
 # API endpoints already used by your dashboard sections
@@ -263,6 +268,50 @@ def api_production_order():
     with get_db() as conn:
         row = conn.execute("SELECT * FROM production_orders ORDER BY created_at DESC LIMIT 1").fetchone()
     return jsonify(dict(row) if row else {})
+
+
+# NEW: Workers API for your app.js (fixes 404 on /api/workers)
+@app.get("/api/workers")
+def api_workers():
+    search = (request.args.get("search") or "").strip()
+    department = (request.args.get("department") or "").strip()
+    status = (request.args.get("status") or "").strip()  # "Active" or "Idle" or ""
+
+    sql = "SELECT * FROM workers WHERE 1=1"
+    params = []
+
+    if search:
+        sql += " AND (name LIKE ? OR token_id LIKE ? OR department LIKE ? OR line LIKE ?)"
+        like = f"%{search}%"
+        params.extend([like, like, like, like])
+
+    if department:
+        sql += " AND department = ?"
+        params.append(department)
+
+    if status:
+        if status.lower() == "active":
+            sql += " AND active = 1"
+        elif status.lower() == "idle":
+            sql += " AND active = 0"
+
+    sql += " ORDER BY created_at DESC"
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    # Return a simple JSON your existing app.js list renderer can use if needed
+    return jsonify([{
+        "id": r["id"],
+        "name": r["name"],
+        "token_id": r["token_id"],
+        "department": r["department"],
+        "line": r["line"],
+        "active": bool(r["active"]),
+        "qrcode_path": r["qrcode_path"],
+        "created_at": r["created_at"],
+        "updated_at": r["updated_at"]
+    } for r in rows])
 
 
 # -------------------------------------------------------------------

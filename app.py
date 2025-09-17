@@ -685,7 +685,6 @@ def generate_and_save_qr_codes(token_id):
     now_str = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
     svg_filename = f'qrcode_{token_id}_{now_str}.svg'
     png_filename = f'qrcode_{token_id}_{now_str}.png'
-
     svg_path = os.path.join(QR_FOLDER, svg_filename)
     png_path = os.path.join(QR_FOLDER, png_filename)
 

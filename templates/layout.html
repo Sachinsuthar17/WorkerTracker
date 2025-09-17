@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{% block title %}Production Management System{% endblock %}</title>
+
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -14,13 +15,12 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="logo"><h2>PMS</h2></div>
-        <button class="sidebar-toggle" id="sidebarToggle">
+        <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle menu">
           <span></span><span></span><span></span>
         </button>
       </div>
 
-      <!-- IMPORTANT: these links always point to index + hash.
-           On the index page we enable SPA behavior via data-spa="true". -->
+      <!-- Always link to index + section hash -->
       <nav class="sidebar-nav">
         <a href="{{ url_for('index') }}#dashboard" class="nav-item" data-section="dashboard">
           <span class="nav-icon">📊</span><span class="nav-text">Dashboard</span>

@@ -184,10 +184,43 @@ def index():
         workers = conn.execute("SELECT * FROM workers ORDER BY created_at DESC").fetchall()
     return render_template("index.html", workers=workers)
 
-# some templates link to `url_for('dashboard')` (e.g., layout.html)
+# Some templates (layout.html) link to these endpoints.
+# Provide lightweight aliases that land on the same single-page UI.
 @app.get("/dashboard")
 def dashboard():
     return redirect(url_for("index"))
+
+def _section_redirect(section: str):
+    # keep SPA layout; deep-link to section without changing UI/CSS
+    return redirect(url_for("index") + f"#{section}")
+
+@app.get("/workers")
+def workers_page():
+    return _section_redirect("workers")
+
+@app.get("/operations")
+def operations_page():
+    return _section_redirect("operations")
+
+@app.get("/bundles")
+def bundles_page():
+    return _section_redirect("bundles")
+
+@app.get("/production-order")
+def production_order_page():
+    return _section_redirect("production-order")
+
+@app.get("/file-upload")
+def file_upload_page():
+    return _section_redirect("file-upload")
+
+@app.get("/scanner")
+def scanner_page():
+    return _section_redirect("scanner")
+
+@app.get("/reports")
+def reports_page():
+    return _section_redirect("reports")
 
 
 # -------------------------------------------------------------------
@@ -270,7 +303,7 @@ def api_production_order():
     return jsonify(dict(row) if row else {})
 
 
-# NEW: Workers API for your app.js (fixes 404 on /api/workers)
+# NEW: Workers API for app.js (fixes previous 404 on /api/workers)
 @app.get("/api/workers")
 def api_workers():
     search = (request.args.get("search") or "").strip()
@@ -300,7 +333,6 @@ def api_workers():
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
 
-    # Return a simple JSON your existing app.js list renderer can use if needed
     return jsonify([{
         "id": r["id"],
         "name": r["name"],

@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ import openpyxl
 # --- SQLAlchemy (DB-agnostic: Postgres in prod, SQLite locally) ---
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, Integer, String, Text, Float,
-    DateTime, Boolean, select, func, insert, update, delete, and_, or_
+    DateTime, Boolean, select, func, insert, update, delete, and_, or_, text
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -36,11 +37,24 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# DB: Postgres if DATABASE_URL provided; else SQLite in DATA_DIR
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+# --- DB URL normalization (Render) ---------------------------------
+def normalize_db_url():
+    db_url = (
+        os.environ.get("DATABASE_URL")
+        or os.environ.get("POSTGRES_URL")
+        or os.environ.get("DATABASE_INTERNAL_URL")
+        or ""
+    ).strip()
+    if not db_url:
+        return ""
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if "sslmode=" not in db_url:
+        db_url += ("&" if "?" in db_url else "?") + "sslmode=require"
+    return db_url
+
+DATABASE_URL = normalize_db_url()
 if DATABASE_URL:
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     ENGINE_URL = DATABASE_URL
 else:
     ENGINE_URL = f"sqlite:///{(DATA_DIR / 'attendance.db').as_posix()}"
@@ -64,9 +78,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 def _ensure_symlink(target: Path, link: Path):
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink():
-            return
-        if link.exists():
+        if link.is_symlink() or link.exists():
             return
         link.symlink_to(target, target_is_directory=True)
     except Exception as e:
@@ -92,7 +104,8 @@ workers = Table(
     Column("token_id", String(255), nullable=False, unique=True),
     Column("department", String(255), nullable=False),
     Column("line", String(255)),
-    Column("active", Boolean, nullable=False, server_default="1"),
+    # NOTE: no server_default here; we set default via bootstrap DDL
+    Column("active", Boolean, nullable=False),
     Column("qrcode_path", String(512)),
     Column("qrcode_svg_path", String(512)),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
@@ -115,7 +128,7 @@ operations = Table(
 bundles = Table(
     "bundles", metadata,
     Column("id", Integer, primary_key=True),
-    Column("bundle_no", String(255), unique=True),
+    Column("bundle_no", String(255)),
     Column("order_no", String(255)),
     Column("style", String(255)),
     Column("color", String(255)),
@@ -154,15 +167,116 @@ file_uploads = Table(
     Column("uploaded_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+# --- Boot-time schema fixer (handles missing columns on Postgres) ---
+def ensure_pg_schema():
+    # Only run against Postgres
+    if not DATABASE_URL or not DATABASE_URL.startswith("postgresql://"):
+        print("Schema bootstrap: using SQLite or no DATABASE_URL; skipping.", file=sys.stderr)
+        return
+    ddl = """
+    -- Ensure minimal tables exist
+    CREATE TABLE IF NOT EXISTS workers (
+      id SERIAL PRIMARY KEY,
+      name text,
+      token_id text UNIQUE,
+      department text,
+      line text
+    );
+    CREATE TABLE IF NOT EXISTS operations (
+      id SERIAL PRIMARY KEY,
+      seq_no integer,
+      op_no text,
+      description text,
+      machine text,
+      department text,
+      std_min double precision,
+      piece_rate double precision,
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS bundles (
+      id SERIAL PRIMARY KEY
+    );
+    CREATE TABLE IF NOT EXISTS production_orders (
+      id SERIAL PRIMARY KEY,
+      order_no text UNIQUE,
+      style text,
+      quantity integer,
+      buyer text,
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS scans (
+      id SERIAL PRIMARY KEY
+    );
+    CREATE TABLE IF NOT EXISTS file_uploads (
+      id SERIAL PRIMARY KEY,
+      filename text NOT NULL,
+      original_filename text NOT NULL,
+      file_type text NOT NULL,
+      file_path text NOT NULL,
+      uploaded_at timestamptz DEFAULT now()
+    );
+
+    -- workers: expected columns
+    ALTER TABLE workers ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+    ALTER TABLE workers ADD COLUMN IF NOT EXISTS qrcode_path text;
+    ALTER TABLE workers ADD COLUMN IF NOT EXISTS qrcode_svg_path text;
+    ALTER TABLE workers ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+    ALTER TABLE workers ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+    -- bundles: rename bundle_code -> bundle_no if present
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='bundles' AND column_name='bundle_code'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='bundles' AND column_name='bundle_no'
+      ) THEN
+        ALTER TABLE bundles RENAME COLUMN bundle_code TO bundle_no;
+      END IF;
+    END $$;
+
+    -- bundles: expected columns
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS bundle_no text;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS order_no text;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS style text;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS color text;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS size text;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS quantity integer;
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS status text DEFAULT 'Pending';
+    ALTER TABLE bundles ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+
+    -- scans: expected columns
+    ALTER TABLE scans ADD COLUMN IF NOT EXISTS code text;
+    ALTER TABLE scans ADD COLUMN IF NOT EXISTS worker_id integer;
+    ALTER TABLE scans ADD COLUMN IF NOT EXISTS bundle_id integer;
+    ALTER TABLE scans ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+    """
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(ddl)
+        print("Schema bootstrap: ensured ✔", file=sys.stderr)
+    except Exception as e:
+        print(f"Schema bootstrap failed: {e}", file=sys.stderr)
+
 def init_db():
+    # Make sure columns exist in Postgres first, then create any missing tables/idx generically.
+    ensure_pg_schema()
     metadata.create_all(engine)
 
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
 def ci_like(column, term: str):
-    """Portable case-insensitive LIKE for Postgres/SQLite."""
-    return func.lower(column).like(func.lower(term))
+    """Portable case-insensitive LIKE for Postgres/SQLite. Pass a pattern like '%foo%'."""
+    return func.lower(column).like(term.lower())
+
+def fmt_ts(v):
+    try:
+        return v.isoformat()
+    except Exception:
+        return str(v) if v else ""
 
 # -------------------------------------------------------------------
 # QR helpers (SVG + PNG)
@@ -306,7 +420,7 @@ def api_recent_activity():
         data = [{
             "type": "Scan",
             "description": r["code"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else ""
+            "created_at": fmt_ts(r["created_at"])
         } for r in rows]
         return jsonify(data)
     except Exception as e:
@@ -382,8 +496,8 @@ def api_workers():
         "line": r["line"],
         "active": bool(r["active"]),
         "qrcode_path": r["qrcode_path"],
-        "created_at": r["created_at"].isoformat() if r["created_at"] else "",
-        "updated_at": r["updated_at"].isoformat() if r["updated_at"] else ""
+        "created_at": fmt_ts(r["created_at"]),
+        "updated_at": fmt_ts(r["updated_at"]),
     } for r in rows])
 
 # -------------------------------------------------------------------
@@ -585,8 +699,10 @@ def upload_workers():
     except Exception as e:
         app.logger.error("Excel processing error: %s", e)
         flash("Error processing Excel file.", "error")
-        try: temp_path.unlink(missing_ok=True)
-        except Exception: pass
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         return redirect(url_for("index"))
 
     try:

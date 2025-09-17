@@ -483,7 +483,6 @@ def production_report():
 # -----------------------------
 # New Worker Routes
 # -----------------------------
-
 @app.route('/add_worker', methods=['GET', 'POST'])
 def add_worker():
     if request.method == 'POST':

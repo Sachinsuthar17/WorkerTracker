@@ -5,7 +5,6 @@
 {% block content %}
   <!-- Dashboard Section -->
   <section class="section active" id="dashboard">
-    <!-- your dashboard cards/charts/feeds go here -->
     <div class="section-header">
       <h1>Dashboard</h1>
       <div class="header-actions">
@@ -15,14 +14,34 @@
     </div>
 
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-icon">👥</div><div class="kpi-content">
-        <div id="activeWorkers" class="kpi-value">0</div><div class="kpi-label">Active Workers</div></div></div>
-      <div class="kpi-card"><div class="kpi-icon">📦</div><div class="kpi-content">
-        <div id="totalBundles" class="kpi-value">0</div><div class="kpi-label">Total Bundles</div></div></div>
-      <div class="kpi-card"><div class="kpi-icon">⚙️</div><div class="kpi-content">
-        <div id="totalOperations" class="kpi-value">0</div><div class="kpi-label">Operations</div></div></div>
-      <div class="kpi-card"><div class="kpi-icon">₹</div><div class="kpi-content">
-        <div id="totalEarnings" class="kpi-value">0.00</div><div class="kpi-label">Earnings (demo)</div></div></div>
+      <div class="kpi-card">
+        <div class="kpi-icon">👥</div>
+        <div class="kpi-content">
+          <div id="activeWorkers" class="kpi-value">0</div>
+          <div class="kpi-label">Active Workers</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">📦</div>
+        <div class="kpi-content">
+          <div id="totalBundles" class="kpi-value">0</div>
+          <div class="kpi-label">Total Bundles</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">⚙️</div>
+        <div class="kpi-content">
+          <div id="totalOperations" class="kpi-value">0</div>
+          <div class="kpi-label">Operations</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">₹</div>
+        <div class="kpi-content">
+          <div id="totalEarnings" class="kpi-value">0.00</div>
+          <div class="kpi-label">Earnings (demo)</div>
+        </div>
+      </div>
     </div>
 
     <div class="charts-grid">
@@ -81,8 +100,8 @@
           {% for worker in workers %}
             <tr>
               <td>{{ worker.name }}</td>
-              <td>{{ worker.token_id }}</td>
-              <td>{{ worker.department }}</td>
+              <td><code>{{ worker.token_id }}</code></td>
+              <td><span class="department-tag">{{ worker.department }}</span></td>
               <td>{{ worker.line or 'N/A' }}</td>
               <td>
                 {% if worker.active %}
@@ -113,5 +132,78 @@
     </div>
   </section>
 
-  <!-- Add your other sections with the same markup IDs: operations, bundles, production-order, file-upload, scanner, reports -->
+  <!-- Operations -->
+  <section class="section" id="operations">
+    <div class="section-header">
+      <h1>Operations Management</h1>
+      <input id="operationSearch" class="form-control search-input" placeholder="Search operations...">
+    </div>
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr><th>Seq</th><th>Op No</th><th>Description</th><th>Machine</th><th>Department</th><th>Std Min</th><th>Piece Rate</th></tr>
+        </thead>
+        <tbody id="operationsTable"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Bundles -->
+  <section class="section" id="bundles">
+    <div class="section-header"><h1>Bundle Management</h1></div>
+    <div class="bundles-grid" id="bundlesGrid"></div>
+  </section>
+
+  <!-- Production Order -->
+  <section class="section" id="production-order">
+    <div class="section-header"><h1>Production Order</h1></div>
+    <div class="order-details">
+      <div class="order-card">
+        <h3>Latest Order</h3>
+        <div class="order-info">
+          <div class="info-row"><span class="label">Order No</span><span class="value" id="orderNo">-</span></div>
+          <div class="info-row"><span class="label">Style</span><span class="value" id="orderStyle">-</span></div>
+          <div class="info-row"><span class="label">Quantity</span><span class="value" id="orderQuantity">-</span></div>
+          <div class="info-row"><span class="label">Buyer</span><span class="value" id="orderBuyer">-</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Scanner (UI demo) -->
+  <section class="section" id="scanner">
+    <div class="section-header"><h1>ESP32 Scanner</h1></div>
+    <div class="scanner-container">
+      <div class="scanner-display">
+        <div class="scanner-screen">
+          <div class="scan-line"></div>
+          <div id="scannerStatus" class="scanner-status">Ready to Scan</div>
+          <div id="scanResult" class="scan-result"></div>
+        </div>
+        <div class="scanner-controls">
+          <button id="startScan" class="btn btn--primary">Start</button>
+          <button id="stopScan" class="btn btn--secondary" disabled>Stop</button>
+          <button id="resetScan" class="btn btn--outline">Reset</button>
+        </div>
+      </div>
+      <div class="recent-scans">
+        <h4>Recent Scans</h4>
+        <div id="recentScans" class="scans-list">
+          <div class="scan-item">No recent scans</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Reports placeholder -->
+  <section class="section" id="reports">
+    <div class="section-header"><h1>Reports</h1></div>
+    <div class="reports-grid">
+      <div class="report-card">
+        <h3>Production Summary</h3>
+        <p>Summary report (coming soon)</p>
+        <button class="btn btn--secondary" onclick="alert('Coming soon')">Generate</button>
+      </div>
+    </div>
+  </section>
 {% endblock %}

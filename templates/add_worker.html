@@ -9,35 +9,25 @@
     <form method="post" action="{{ url_for('add_worker') }}">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" class="form-control" name="name" required>
+        <input type="text" name="name" class="form-control" required>
       </div>
       <div class="form-group">
         <label>Token ID</label>
-        <input type="text" class="form-control" name="token_id" required>
+        <input type="text" name="token_id" class="form-control" required>
       </div>
       <div class="form-group">
         <label>Department</label>
-        <select class="form-control" name="department" required>
-          <option value="">Select Department</option>
-          <option value="SLEEVE">SLEEVE</option>
-          <option value="COLLAR">COLLAR</option>
-          <option value="LINING">LINING</option>
-          <option value="BODY">BODY</option>
-          <option value="ASSE-1">ASSE-1</option>
-          <option value="ASSE-2">ASSE-2</option>
-          <option value="FLAP">FLAP</option>
-          <option value="BACK">BACK</option>
-        </select>
+        <input type="text" name="department" class="form-control" required>
       </div>
       <div class="form-group">
         <label>Line</label>
-        <input type="text" class="form-control" name="line">
+        <input type="text" name="line" class="form-control">
       </div>
       <div class="form-group">
         <label>Active</label>
         <input type="checkbox" name="active" value="1" checked>
       </div>
-      <button type="submit" class="btn btn--primary">Add Worker</button>
+      <button type="submit" class="btn btn--primary">Add</button>
     </form>
   </div>
 </div>

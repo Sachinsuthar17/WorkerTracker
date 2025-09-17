@@ -9,35 +9,25 @@
     <form method="post" action="{{ url_for('edit_worker', worker_id=worker.id) }}">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" class="form-control" name="name" value="{{ worker.name }}" required>
+        <input type="text" name="name" class="form-control" value="{{ worker.name }}" required>
       </div>
       <div class="form-group">
-        <label>Token ID (Cannot Change)</label>
-        <input type="text" class="form-control" value="{{ worker.token_id }}" disabled>
+        <label>Token ID (Immutable)</label>
+        <input type="text" value="{{ worker.token_id }}" class="form-control" disabled>
       </div>
       <div class="form-group">
         <label>Department</label>
-        <select class="form-control" name="department" required>
-          <option value="{{ worker.department }}">{{ worker.department }}</option>
-          <option value="SLEEVE">SLEEVE</option>
-          <option value="COLLAR">COLLAR</option>
-          <option value="LINING">LINING</option>
-          <option value="BODY">BODY</option>
-          <option value="ASSE-1">ASSE-1</option>
-          <option value="ASSE-2">ASSE-2</option>
-          <option value="FLAP">FLAP</option>
-          <option value="BACK">BACK</option>
-        </select>
+        <input type="text" name="department" class="form-control" value="{{ worker.department }}" required>
       </div>
       <div class="form-group">
         <label>Line</label>
-        <input type="text" class="form-control" name="line" value="{{ worker.line }}">
+        <input type="text" name="line" class="form-control" value="{{ worker.line }}">
       </div>
       <div class="form-group">
         <label>Active</label>
         <input type="checkbox" name="active" value="1" {% if worker.active %}checked{% endif %}>
       </div>
-      <button type="submit" class="btn btn--primary">Update Worker</button>
+      <button type="submit" class="btn btn--primary">Update</button>
     </form>
   </div>
 </div>

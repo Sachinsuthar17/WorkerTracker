@@ -5,35 +5,41 @@ import json
 import uuid
 from datetime import datetime
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file, flash, redirect, url_for
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from werkzeug.utils import secure_filename
+import openpyxl
 
-# Try to import QR code - make it optional to avoid dependency issues
+# Try to import QR code and Pillow
 try:
     import qrcode
     import io
     import base64
+    from PIL import Image
     QR_AVAILABLE = True
 except ImportError:
     QR_AVAILABLE = False
-    print("QR code libraries not available - some features disabled")
+    print("QR code or Pillow libraries not available - some features disabled")
 
 # -----------------------------
 # Flask Setup
 # -----------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
+app.secret_key = os.urandom(24)  # For flash messages
 
 # File upload configuration
 UPLOAD_FOLDER = 'uploads'
+QR_FOLDER = 'static/qrcodes'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'pdf'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB limit
 
-# Create upload directory if it doesn't exist
+# Create directories if they don't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(QR_FOLDER, exist_ok=True)
 
 # -----------------------------
 # Database Configuration
@@ -475,6 +481,229 @@ def production_report():
     except Exception as e:
         print(f"Production report error: {e}")
         return jsonify([])
+
+# -----------------------------
+# New Worker Routes
+# -----------------------------
+@app.route('/add_worker', methods=['GET', 'POST'])
+def add_worker():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        token_id = request.form.get('token_id', '').strip()
+        department = request.form.get('department', '').strip()
+        line = request.form.get('line', '').strip()
+        active = int(request.form.get('active', '1'))
+
+        if not token_id:
+            flash('Token ID is required.', 'error')
+            return redirect(url_for('workers'))
+
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                # Check duplicate
+                cur.execute("SELECT 1 FROM workers WHERE token_id = %s", (token_id,))
+                if cur.fetchone():
+                    flash('Duplicate Token ID not allowed.', 'error')
+                    return redirect(url_for('workers'))
+
+                # Generate QR codes
+                qr_svg_path, qr_png_path = generate_and_save_qr_codes(token_id)
+
+                cur.execute(
+                    "INSERT INTO workers (name, token_id, department, line, active, qr_svg, qr_png, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())",
+                    (name, token_id, department, line, active, qr_svg_path, qr_png_path)
+                )
+                conn.commit()
+
+            flash('Worker added successfully!', 'success')
+            return redirect(url_for('workers'))
+        except Exception as e:
+            print(f"Error adding worker: {e}")
+            flash('Server error. Please try again.', 'error')
+            return redirect(url_for('workers'))
+    return render_template('add_worker.html')
+
+@app.route('/edit_worker/<int:worker_id>', methods=['GET', 'POST'])
+def edit_worker(worker_id):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM workers WHERE id = %s", (worker_id,))
+        worker = cur.fetchone()
+        if not worker:
+            flash('Worker not found.', 'error')
+            return redirect(url_for('workers'))
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        department = request.form.get('department', '').strip()
+        line = request.form.get('line', '').strip()
+        active = int(request.form.get('active', '1'))
+
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE workers SET name = %s, department = %s, line = %s, active = %s, updated_at = NOW() WHERE id = %s",
+                    (name, department, line, active, worker_id)
+                )
+                conn.commit()
+            flash('Worker updated successfully!', 'success')
+            return redirect(url_for('workers'))
+        except Exception as e:
+            print(f"Error editing worker: {e}")
+            flash('Server error. Please try again.', 'error')
+            return redirect(url_for('workers'))
+
+    return render_template('edit_worker.html', worker=worker)
+
+@app.route('/delete_worker/<int:worker_id>', methods=['POST'])
+def delete_worker(worker_id):
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT qr_svg, qr_png FROM workers WHERE id = %s", (worker_id,))
+            worker = cur.fetchone()
+            if not worker:
+                flash('Worker not found.', 'error')
+                return redirect(url_for('workers'))
+
+            # Delete QR files
+            for path in [worker['qr_svg'], worker['qr_png']]:
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+            cur.execute("DELETE FROM workers WHERE id = %s", (worker_id,))
+            conn.commit()
+
+        flash('Worker deleted successfully!', 'success')
+        return redirect(url_for('workers'))
+    except Exception as e:
+        print(f"Error deleting worker: {e}")
+        flash('Server error. Please try again.', 'error')
+        return redirect(url_for('workers'))
+
+@app.route('/download_qr/<int:worker_id>')
+def download_qr(worker_id):
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT qr_png FROM workers WHERE id = %s", (worker_id,))
+            worker = cur.fetchone()
+            if not worker or not worker['qr_png']:
+                flash('QR code not found.', 'error')
+                return redirect(url_for('workers'))
+
+            return send_file(worker['qr_png'], as_attachment=True, download_name=f"qr_{worker_id}.png")
+    except Exception as e:
+        print(f"Error downloading QR: {e}")
+        flash('Error downloading QR code.', 'error')
+        return redirect(url_for('workers'))
+
+@app.route('/upload_workers', methods=['POST'])
+def upload_workers():
+    if 'file' not in request.files:
+        flash('No file uploaded.', 'error')
+        return redirect(url_for('workers'))
+
+    file = request.files['file']
+    if file.filename == '':
+        flash('No file selected.', 'error')
+        return redirect(url_for('workers'))
+
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        added = 0
+        skipped = 0
+        invalid = 0
+        skipped_tokens = []
+
+        try:
+            wb = openpyxl.load_workbook(file_path)
+            ws = wb.active
+
+            # Assume first row is header
+            header = [cell.value.lower() if cell.value else '' for cell in ws[1]]
+
+            required_columns = ['name', 'token_id', 'department', 'line', 'active']
+            col_indices = {col: header.index(col) for col in required_columns if col in header}
+
+            if len(col_indices) != len(required_columns):
+                flash('Excel missing required columns.', 'error')
+                return redirect(url_for('workers'))
+
+            with get_conn() as conn, conn.cursor() as cur:
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    try:
+                        name = row[col_indices['name']]
+                        token_id = row[col_indices['token_id']]
+                        department = row[col_indices['department']]
+                        line = row[col_indices['line']]
+                        active = 1 if row[col_indices['active']] else 0
+
+                        if not token_id:
+                            invalid += 1
+                            continue
+
+                        cur.execute("SELECT 1 FROM workers WHERE token_id = %s", (token_id,))
+                        if cur.fetchone():
+                            skipped += 1
+                            skipped_tokens.append(token_id)
+                            continue
+
+                        qr_svg_path, qr_png_path = generate_and_save_qr_codes(token_id)
+
+                        cur.execute(
+                            "INSERT INTO workers (name, token_id, department, line, active, qr_svg, qr_png, created_at, updated_at) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())",
+                            (name, token_id, department, line, active, qr_svg_path, qr_png_path)
+                        )
+
+                        added += 1
+                    except Exception as e:
+                        print(f"Error processing row: {e}")
+                        invalid += 1
+
+                conn.commit()
+
+            os.remove(file_path)  # Clean up uploaded file
+
+            summary = f"Added: {added}, Skipped (duplicates): {skipped}, Invalid: {invalid}"
+            if skipped_tokens:
+                summary += f" Skipped tokens: {', '.join(skipped_tokens[:10])}"
+            flash(summary, 'success')
+            return redirect(url_for('workers'))
+
+        except Exception as e:
+            print(f"Excel processing error: {e}")
+            flash('Error processing Excel file.', 'error')
+            return redirect(url_for('workers'))
+
+    flash('Invalid file type.', 'error')
+    return redirect(url_for('workers'))
+
+# QR Generation Helper
+def generate_and_save_qr_codes(token_id):
+    import datetime
+    now_str = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+    svg_filename = f'qrcode_{token_id}_{now_str}.svg'
+    png_filename = f'qrcode_{token_id}_{now_str}.png'
+
+    svg_path = os.path.join(QR_FOLDER, svg_filename)
+    png_path = os.path.join(QR_FOLDER, png_filename)
+
+    # Generate SVG
+    factory = qrcode.image.svg.SvgImage
+    img = qrcode.make(token_id, image_factory=factory)
+    img.save(svg_path)
+
+    # Generate PNG
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(token_id)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    img.save(png_path)
+
+    return svg_filename, png_filename  # Return relative paths for DB
 
 # -----------------------------
 # Startup

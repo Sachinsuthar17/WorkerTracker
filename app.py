@@ -381,9 +381,11 @@ def download_qr(worker_id: int):
 
 # -------------------------------------------------------------------
 # Bulk Excel upload with dedupe
+#  - Expose BOTH /upload_workers (used by your template) AND /upload_excel
 # -------------------------------------------------------------------
-@app.post("/upload_excel")
-def upload_excel():
+@app.route("/upload_workers", methods=["POST"])
+@app.route("/upload_excel", methods=["POST"])
+def upload_workers():
     f = request.files.get("file")
     if not f or not f.filename:
         flash("No file selected.", "error")

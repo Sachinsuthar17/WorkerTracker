@@ -24,7 +24,6 @@ from sqlalchemy import (
     DateTime, Boolean, select, func, insert, update, delete, and_, or_, text
 )
 from sqlalchemy.engine import Engine
-    # noqa: E402
 from sqlalchemy.exc import IntegrityError
 
 # -------------------------------------------------------------------
@@ -91,13 +90,9 @@ def _ensure_symlink(target: Path, link: Path):
             return
 
         if link.exists() and link.is_dir() and not link.is_symlink():
-            # Move any existing files out of static/... into DATA_DIR/...
             for child in link.iterdir():
                 dest = target / child.name
-                if child.is_dir():
-                    shutil.move(str(child), str(dest))
-                else:
-                    shutil.move(str(child), str(dest))
+                shutil.move(str(child), str(dest))
             shutil.rmtree(link)
 
         if not link.exists():
@@ -125,7 +120,7 @@ workers = Table(
     Column("token_id", String(255), nullable=False, unique=True),
     Column("department", String(255), nullable=False),
     Column("line", String(255)),
-    # NOTE: no server_default here; we set default via bootstrap DDL for PG
+    # NOTE: no server_default here; set by PG bootstrap DDL
     Column("active", Boolean, nullable=False),
     Column("qrcode_path", String(512)),
     Column("qrcode_svg_path", String(512)),
@@ -214,9 +209,7 @@ def ensure_pg_schema():
       piece_rate double precision,
       created_at timestamptz DEFAULT now()
     );
-    CREATE TABLE IF NOT EXISTS bundles (
-      id SERIAL PRIMARY KEY
-    );
+    CREATE TABLE IF NOT EXISTS bundles ( id SERIAL PRIMARY KEY );
     CREATE TABLE IF NOT EXISTS production_orders (
       id SERIAL PRIMARY KEY,
       order_no text UNIQUE,
@@ -225,9 +218,7 @@ def ensure_pg_schema():
       buyer text,
       created_at timestamptz DEFAULT now()
     );
-    CREATE TABLE IF NOT EXISTS scans (
-      id SERIAL PRIMARY KEY
-    );
+    CREATE TABLE IF NOT EXISTS scans ( id SERIAL PRIMARY KEY );
     CREATE TABLE IF NOT EXISTS file_uploads (
       id SERIAL PRIMARY KEY,
       filename text NOT NULL,
@@ -282,7 +273,6 @@ def ensure_pg_schema():
         print(f"Schema bootstrap failed: {e}", file=sys.stderr)
 
 def init_db():
-    # Make sure columns exist in Postgres first, then create any missing tables/idx generically.
     ensure_pg_schema()
     metadata.create_all(engine)
 
@@ -291,7 +281,6 @@ def init_db():
 # -------------------------------------------------------------------
 def ci_like(column, term: str):
     """Portable case-insensitive LIKE for Postgres/SQLite. Pass a pattern like '%foo%'."""
-    # Use SQL lower(column) LIKE lower(:pattern)
     return func.lower(column).like(term.lower())
 
 def fmt_ts(v):
@@ -308,7 +297,6 @@ def generate_qr_files(token_id: str, worker_id: int) -> tuple[str, str]:
     Create PNG + SVG QR for token_id under persistent qrcodes/.
     Returns (png_rel_path, svg_rel_path) relative to /static (qrcodes/...).
     """
-    # make sure the symlink is correct each time we write
     _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
 
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -344,7 +332,7 @@ def _ensure_qr_present(conn, worker_row: dict) -> tuple[str, str]:
     needs_regen = True
 
     if png_rel:
-        p = STATIC_DIR / png_rel  # static symlink points into DATA_DIR
+        p = STATIC_DIR / png_rel
         if p.exists():
             needs_regen = False
 
@@ -363,7 +351,7 @@ def delete_qr_files(qr_png_rel: str | None, qr_svg_rel: str | None):
     for rel in (qr_png_rel, qr_svg_rel):
         if not rel:
             continue
-        p = STATIC_DIR / rel  # points through symlink to disk
+        p = STATIC_DIR / rel
         try:
             if p.exists():
                 p.unlink()
@@ -686,7 +674,7 @@ def download_qr(worker_id: int):
             flash("QR not available.", "error")
             return redirect(url_for("index"))
 
-    p = STATIC_DIR / row[1]  # static symlink points to persistent disk
+    p = STATIC_DIR / row[1]
     if not p.exists():
         # self-heal if someone tries to download right after a deploy
         with engine.begin() as conn:
@@ -702,109 +690,83 @@ def download_qr(worker_id: int):
     return send_file(str(p), mimetype="image/png", as_attachment=True, download_name=f"qr_{row[0]}.png")
 
 # -------------------------------------------------------------------
-# Bulk Excel upload with dedupe
+# NEW: Print pages (single & batch)
 # -------------------------------------------------------------------
-@app.route("/upload_workers", methods=["POST"])
-@app.route("/upload_excel", methods=["POST"])
-def upload_workers():
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash("No file selected.", "error")
-        return redirect(url_for("index"))
-
-    ext = Path(f.filename).suffix.lower()
-    if ext not in ALLOWED_XLSX_EXT:
-        flash("Invalid file. Please upload a .xlsx file.", "error")
-        return redirect(url_for("index"))
-
-    temp_path = UPLOADS_DIR / f"{uuid.uuid4()}_{secure_filename(f.filename)}"
-    f.save(temp_path)
-
-    added = skipped = invalid = 0
-    skipped_tokens: list[str] = []
-
-    try:
-        wb = openpyxl.load_workbook(temp_path)
-        ws = wb.active
-
-        header = [str(c).strip().lower() if c is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
-        required = ["name", "token_id", "department", "line", "active"]
-        missing = [h for h in required if h not in header]
-        if missing:
-            flash(f"Excel missing required headers: {', '.join(missing)}", "error")
-            temp_path.unlink(missing_ok=True)
+@app.get("/print_qr/<int:worker_id>")
+def print_qr(worker_id: int):
+    with engine.begin() as conn:
+        r = conn.execute(select(workers).where(workers.c.id == worker_id)).mappings().first()
+        if not r:
+            flash("Worker not found.", "error")
             return redirect(url_for("index"))
+        rd = dict(r)
+        png_rel, svg_rel = _ensure_qr_present(conn, rd)
+        rd["qrcode_path"] = png_rel
+        rd["qrcode_svg_path"] = svg_rel
+    # Minimal, print-friendly page
+    return render_template("print_qr.html", worker=rd)
 
-        idx = {h: header.index(h) for h in header}
-
-        with engine.begin() as conn:
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                try:
-                    name = (str(row[idx["name"]]).strip() if row[idx["name"]] is not None else "")
-                    token_id = (str(row[idx["token_id"]]).strip() if row[idx["token_id"]] is not None else "")
-                    department = (str(row[idx["department"]]).strip() if row[idx["department"]] is not None else "")
-                    line = (str(row[idx["line"]]).strip() if row[idx["line"]] is not None else "")
-                    active_cell = row[idx["active"]]
-                    active_bool = str(active_cell).strip().lower() in ("1", "true", "yes", "y")
-                except Exception:
-                    invalid += 1
-                    continue
-
-                if not token_id:
-                    invalid += 1
-                    continue
-
-                exists = conn.execute(
-                    select(workers.c.id).where(workers.c.token_id == token_id)
-                ).first()
-                if exists:
-                    skipped += 1
-                    if len(skipped_tokens) < 10:
-                        skipped_tokens.append(token_id)
-                    continue
-
-                res = conn.execute(insert(workers).values(
-                    name=name,
-                    token_id=token_id,
-                    department=department,
-                    line=line,
-                    active=active_bool,
-                ))
-                worker_id = res.inserted_primary_key[0]
-
-                png_rel, svg_rel = generate_qr_files(token_id, worker_id)
-                conn.execute(update(workers).where(workers.c.id == worker_id).values(
-                    qrcode_path=png_rel,
-                    qrcode_svg_path=svg_rel,
-                    updated_at=func.now()
-                ))
-                added += 1
-    except Exception as e:
-        app.logger.error("Excel processing error: %s", e)
-        flash("Error processing Excel file.", "error")
-        try:
-            temp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+@app.get("/print_qrs")
+def print_qrs():
+    ids_param = (request.args.get("ids") or "").strip()
+    if not ids_param:
+        flash("No workers selected to print.", "error")
+        return redirect(url_for("index"))
+    try:
+        ids = [int(x) for x in ids_param.split(",") if x.strip().isdigit()]
+    except Exception:
+        flash("Invalid ids.", "error")
+        return redirect(url_for("index"))
+    if not ids:
+        flash("No valid ids provided.", "error")
         return redirect(url_for("index"))
 
-    try:
-        temp_path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    items = []
+    with engine.begin() as conn:
+        rows = conn.execute(select(workers).where(workers.c.id.in_(ids)).order_by(workers.c.id)).mappings().all()
+        for r in rows:
+            rd = dict(r)
+            png_rel, svg_rel = _ensure_qr_present(conn, rd)
+            rd["qrcode_path"] = png_rel
+            rd["qrcode_svg_path"] = svg_rel
+            items.append(rd)
 
-    summary = f"Upload complete. Added: {added}, Skipped (duplicates): {skipped}, Invalid: {invalid}"
-    if skipped_tokens:
-        summary += f" | Skipped token_ids (first 10): {', '.join(skipped_tokens)}"
-    flash(summary, "success")
-    return redirect(url_for("index"))
+    return render_template("print_qrs.html", workers=items)
+
+# -------------------------------------------------------------------
+# NEW: Bulk delete API
+# -------------------------------------------------------------------
+@app.post("/api/workers/delete")
+def api_workers_delete():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get("ids", [])
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        return jsonify({"error": "Provide JSON { ids: [int,...] }"}), 400
+    if not ids:
+        return jsonify({"deleted": 0})
+
+    try:
+        with engine.begin() as conn:
+            # collect QR file paths first
+            rows = conn.execute(
+                select(workers.c.id, workers.c.qrcode_path, workers.c.qrcode_svg_path)
+                .where(workers.c.id.in_(ids))
+            ).all()
+            for _id, png_rel, svg_rel in rows:
+                delete_qr_files(png_rel, svg_rel)
+
+            result = conn.execute(delete(workers).where(workers.c.id.in_(ids)))
+            deleted_count = result.rowcount or 0
+        return jsonify({"deleted": int(deleted_count)})
+    except Exception as e:
+        app.logger.error("bulk delete error: %s", e)
+        return jsonify({"error": "Server error during delete"}), 500
 
 # -------------------------------------------------------------------
 # Health
 # -------------------------------------------------------------------
 @app.get("/health")
 def health():
-    # keep the symlink correct
     _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
     return "OK", 200
 

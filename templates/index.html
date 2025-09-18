@@ -244,10 +244,15 @@
     function bindSelectAll() {
       const headerAll = $('#select-all-header');
       const toolbarAll = $('#select-all-workers');
-      const sync = (checked) => { rowChecks().forEach(cb => cb.checked = checked); if (headerAll) headerAll.checked = checked; if (toolbarAll) toolbarAll.checked = checked; };
+      const sync = (checked) => {
+        rowChecks().forEach(cb => cb.checked = checked);
+        if (headerAll) headerAll.checked = checked;
+        if (toolbarAll) toolbarAll.checked = checked;
+      };
 
       headerAll?.addEventListener('change', e => sync(e.target.checked));
       toolbarAll?.addEventListener('change', e => sync(e.target.checked));
+
       // If rows change individually, clear select-all boxes when not all selected
       document.addEventListener('change', (e) => {
         if (!e.target.classList?.contains('worker-select')) return;
@@ -279,8 +284,11 @@
           ? '<span class="status-badge status-active">ACTIVE</span>'
           : '<span class="status-badge status-idle">INACTIVE</span>';
 
+        // Important: don't encode slashes in the path
+        const qrSrc = w.qrcode_path ? ('/static/' + String(w.qrcode_path).replace(/^\/+/, '')) : '';
+
         const qrHtml = w.qrcode_path
-          ? `<img class="qr-thumb" src="/static/${encodeURIComponent(w.qrcode_path)}" width="40" height="40" alt="QR">`
+          ? `<img class="qr-thumb" src="${qrSrc}" width="40" height="40" alt="QR">`
           : 'No QR';
 
         return `

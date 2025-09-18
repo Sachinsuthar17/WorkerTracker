@@ -232,44 +232,38 @@
 
   <!-- Page-specific JS -->
   <script>
-    // ===== Helpers =====
+    // ===== Tiny helpers =====
     const $ = (sel, root=document) => root.querySelector(sel);
     const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
-    // Bulk selection helpers
-    const rowChecks = () => $$('.worker-select');
-    const selectedIds = () => rowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
+    // Cache static elements once
+    const tbody = $('#workersTable');
+    const headerAll = $('#select-all-header');
+    const toolbarAll = $('#select-all-workers');
 
-    // Bind select-all (header + toolbar) -> keep them in sync
-    function bindSelectAll() {
-      const headerAll = $('#select-all-header');
-      const toolbarAll = $('#select-all-workers');
-      const sync = (checked) => {
-        rowChecks().forEach(cb => cb.checked = checked);
-        if (headerAll) headerAll.checked = checked;
-        if (toolbarAll) toolbarAll.checked = checked;
-      };
+    // Row checkbox helpers (scoped to tbody so re-renders are fine)
+    const getRowChecks = () => Array.from(tbody?.querySelectorAll('input.worker-select') || []);
+    const selectedIds  = () => getRowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
 
-      headerAll?.addEventListener('change', e => sync(e.target.checked));
-      toolbarAll?.addEventListener('change', e => sync(e.target.checked));
-
-      // If rows change individually, clear select-all boxes when not all selected
-      document.addEventListener('change', (e) => {
-        if (!e.target.classList?.contains('worker-select')) return;
-        const all = rowChecks();
-        const allChecked = all.length > 0 && all.every(cb => cb.checked);
-        if (headerAll) headerAll.checked = allChecked;
-        if (toolbarAll) toolbarAll.checked = allChecked;
-      });
+    function setAllRows(checked) { getRowChecks().forEach(cb => cb.checked = checked); }
+    function syncMasterChecks() {
+      const checks = getRowChecks();
+      const allChecked = checks.length > 0 && checks.every(cb => cb.checked);
+      if (headerAll) headerAll.checked = allChecked;
+      if (toolbarAll) toolbarAll.checked = allChecked;
+    }
+    function resetMasterChecks() {
+      if (headerAll) headerAll.checked = false;
+      if (toolbarAll) toolbarAll.checked = false;
     }
 
-    // Render workers table rows (used by filters/search)
+    // ===== Render workers rows (used by filters/search) =====
     function renderWorkers(workers) {
-      const tbody = $('#workersTable');
       if (!tbody) return;
 
       if (!workers || workers.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No workers found</td></tr>';
+        resetMasterChecks();
         return;
       }
 
@@ -284,9 +278,7 @@
           ? '<span class="status-badge status-active">ACTIVE</span>'
           : '<span class="status-badge status-idle">INACTIVE</span>';
 
-        // Important: don't encode slashes in the path
         const qrSrc = w.qrcode_path ? ('/static/' + String(w.qrcode_path).replace(/^\/+/, '')) : '';
-
         const qrHtml = w.qrcode_path
           ? `<img class="qr-thumb" src="${qrSrc}" width="40" height="40" alt="QR">`
           : 'No QR';
@@ -311,19 +303,19 @@
       }).join('');
 
       tbody.innerHTML = rows;
-      // rebind select-all syncing after table redraw
-      bindSelectAll();
+      // after redraw, clear master checks so user intent is fresh
+      resetMasterChecks();
     }
 
-    // Fetch filtered workers
+    // ===== Fetch filtered workers =====
     async function loadWorkers() {
       const search = ($('#workerSearch')?.value || '').trim();
       const department = $('#departmentFilter')?.value || '';
-      const status = $('#statusFilter')?.value || '';
+      theStatus = $('#statusFilter')?.value || '';
       const q = new URLSearchParams();
       if (search) q.set('search', search);
       if (department) q.set('department', department);
-      if (status) q.set('status', status);
+      if (theStatus) q.set('status', theStatus);
 
       try {
         const res = await fetch('/api/workers' + (q.toString() ? ('?' + q.toString()) : ''));
@@ -336,12 +328,10 @@
       }
     }
 
-    // Debounce for search input
-    function debounce(fn, ms) {
-      let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-    }
+    // ===== Debounce =====
+    function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }
 
-    // Bulk delete
+    // ===== Bulk delete/print =====
     async function deleteSelected() {
       const ids = selectedIds();
       if (ids.length === 0) { alert('No workers selected.'); return; }
@@ -357,35 +347,44 @@
           const msg = await res.json().catch(()=>({}));
           throw new Error(msg.error || 'Delete failed');
         }
-        // Refresh the table
         await loadWorkers();
       } catch (e) {
         alert(e.message || 'Delete failed.');
       }
     }
-
-    // Bulk print
     function printSelected() {
       const ids = selectedIds();
       if (ids.length === 0) { alert('No workers selected.'); return; }
-      const url = '/print_qrs?ids=' + ids.join(',');
-      window.open(url, '_blank');
+      window.open('/print_qrs?ids=' + ids.join(','), '_blank');
     }
 
-    // Wire up controls
+    // ===== Wire up once (no re-binding on re-render) =====
     window.addEventListener('DOMContentLoaded', () => {
-      bindSelectAll();
+      // Master checkboxes control all row checkboxes
+      headerAll?.addEventListener('change', e => {
+        setAllRows(e.target.checked);
+        if (toolbarAll) toolbarAll.checked = e.target.checked;
+      });
+      toolbarAll?.addEventListener('change', e => {
+        setAllRows(e.target.checked);
+        if (headerAll) headerAll.checked = e.target.checked;
+      });
 
+      // Event delegation: any row checkbox change just updates master states
+      tbody?.addEventListener('change', (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLInputElement) || !t.classList.contains('worker-select')) return;
+        syncMasterChecks();
+      });
+
+      // Bulk buttons
       $('#btn-delete-selected')?.addEventListener('click', deleteSelected);
       $('#btn-print-selected')?.addEventListener('click', printSelected);
 
-      const search = $('#workerSearch');
-      const dept = $('#departmentFilter');
-      const status = $('#statusFilter');
-
-      search?.addEventListener('input', debounce(loadWorkers, 250));
-      dept?.addEventListener('change', loadWorkers);
-      status?.addEventListener('change', loadWorkers);
+      // Filters
+      $('#workerSearch')?.addEventListener('input', debounce(loadWorkers, 250));
+      $('#departmentFilter')?.addEventListener('change', loadWorkers);
+      $('#statusFilter')?.addEventListener('change', loadWorkers);
     });
   </script>
 {% endblock %}

@@ -3,7 +3,7 @@
 {% block title %}Production Management System{% endblock %}
 
 {% block content %}
-  <!-- Make sure checkboxes are visible on dark themes / resets -->
+  <!-- Ensure checkboxes are visible regardless of global resets -->
   <style>
     .checkbox-cell { width: 52px; text-align: center; }
     .checkbox-cell input[type="checkbox"]{
@@ -261,7 +261,7 @@
     const toolbarAll = $('#select-all-workers');
     const selCount   = $('#sel-count');
 
-    // Always query from the document (works after re-renders)
+    // Always query fresh (works after re-renders)
     const getRowChecks = () => Array.from(document.querySelectorAll('#workersTable input.worker-select'));
     const selectedIds  = () => getRowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
 
@@ -284,7 +284,7 @@
       updateSelCount();
     }
 
-    // ===== Render workers rows (used by filters/search) =====
+    // ===== Render workers rows (our renderer for /api/workers) =====
     function renderWorkers(workers){
       if (!tbody) return;
 
@@ -333,7 +333,50 @@
       updateSelCount();
     }
 
-    // ===== Fetch filtered workers =====
+    // ===== Defensive patcher: if any other script rewrites the table without checkboxes, fix it =====
+    function extractIdFromRow(tr){
+      // Try common action links: edit / print_qr / download_qr / delete
+      const link = tr.querySelector('a[href*="/edit/"], a[href*="/print_qr/"], a[href*="/download_qr/"], a[href*="/delete/"]');
+      if (link){
+        const m = link.getAttribute('href').match(/\/(?:edit|print_qr|download_qr|delete)\/(\d+)/);
+        if (m) return parseInt(m[1], 10);
+      }
+      return null;
+    }
+
+    function ensureCheckboxesPresent(){
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.forEach(tr => {
+        // If this row already has a worker checkbox, skip
+        if (tr.querySelector('input.worker-select')) return;
+
+        // Try to prepend a checkbox cell if we can find the id
+        const id = extractIdFromRow(tr);
+        if (!isNaN(id) && id != null){
+          const td = document.createElement('td');
+          td.className = 'checkbox-cell';
+          td.innerHTML = `<input type="checkbox" class="worker-select" value="${id}" data-id="${id}">`;
+          // Prepend as first cell
+          if (tr.firstElementChild){
+            tr.insertBefore(td, tr.firstElementChild);
+          } else {
+            tr.appendChild(td);
+          }
+        }
+      });
+      syncMasterChecks();
+    }
+
+    // Watch for any DOM changes in the workers table body
+    const mo = new MutationObserver(() => ensureCheckboxesPresent());
+    if (tbody){
+      mo.observe(tbody, { childList: true, subtree: true });
+      // Also run once on load to fix whatever is currently there
+      ensureCheckboxesPresent();
+    }
+
+    // ===== Fetch filtered workers using our renderer =====
     async function loadWorkers(){
       const search = ($('#workerSearch')?.value || '').trim();
       const department = $('#departmentFilter')?.value || '';
@@ -398,7 +441,7 @@
         syncMasterChecks();
       });
 
-      // Row checkbox changes (event delegation survives re-render)
+      // Row checkbox changes (delegated)
       tbody?.addEventListener('change', (e) => {
         const t = e.target;
         if (!(t instanceof HTMLInputElement)) return;
@@ -414,6 +457,10 @@
       $('#workerSearch')?.addEventListener('input', debounce(loadWorkers, 250));
       $('#departmentFilter')?.addEventListener('change', loadWorkers);
       $('#statusFilter')?.addEventListener('change', loadWorkers);
+
+      // Optional: run an initial fetch so our renderer owns the table contents
+      // (If another script repaints later, the MutationObserver will restore checkboxes)
+      // loadWorkers();
     });
   </script>
 {% endblock %}

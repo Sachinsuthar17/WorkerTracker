@@ -89,16 +89,40 @@
       </div>
     </div>
 
+    <!-- Bulk actions toolbar -->
+    <div class="bulk-actions">
+      <label class="checkbox-all">
+        <input type="checkbox" id="select-all-workers">
+        <span>Select all</span>
+      </label>
+      <div class="bulk-buttons">
+        <button id="btn-delete-selected" class="btn btn--danger btn-sm">Delete selected</button>
+        <button id="btn-print-selected" class="btn btn--secondary btn-sm">Print selected</button>
+      </div>
+    </div>
+
     <div class="table-container">
       <table class="data-table">
         <thead>
           <tr>
-            <th>Name</th><th>Token ID</th><th>Department</th><th>Line</th><th>Status</th><th>QR Code</th><th>Actions</th>
+            <th class="checkbox-cell">
+              <input type="checkbox" id="select-all-header">
+            </th>
+            <th>Name</th>
+            <th>Token ID</th>
+            <th>Department</th>
+            <th>Line</th>
+            <th>Status</th>
+            <th>QR Code</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="workersTable">
           {% for worker in workers %}
             <tr>
+              <td class="checkbox-cell">
+                <input type="checkbox" class="worker-select" data-id="{{ worker.id }}">
+              </td>
               <td>{{ worker.name }}</td>
               <td><code>{{ worker.token_id }}</code></td>
               <td><span class="department-tag">{{ worker.department }}</span></td>
@@ -112,20 +136,19 @@
               </td>
               <td>
                 {% if worker.qrcode_path %}
-                  <img src="{{ url_for('static', filename=worker.qrcode_path) }}" width="40" alt="QR">
+                  <img class="qr-thumb" src="{{ url_for('static', filename=worker.qrcode_path) }}" width="40" height="40" alt="QR">
                 {% else %}No QR{% endif %}
               </td>
-              <td>
+              <td class="actions-cell">
+                <a href="{{ url_for('print_qr', worker_id=worker.id) }}" target="_blank" class="btn btn--secondary btn-sm">Print</a>
+                <a href="{{ url_for('download_qr', worker_id=worker.id) }}" class="btn btn--outline btn-sm">Download</a>
                 <a href="{{ url_for('edit_worker', worker_id=worker.id) }}" class="btn btn--primary btn-sm">Edit</a>
                 <a href="{{ url_for('delete_worker', worker_id=worker.id) }}" class="btn btn--secondary btn-sm"
                    onclick="return confirm('Are you sure you want to delete this worker?');">Delete</a>
-                {% if worker.qrcode_path %}
-                  <a href="{{ url_for('download_qr', worker_id=worker.id) }}" class="btn btn--outline btn-sm">Download QR</a>
-                {% endif %}
               </td>
             </tr>
           {% else %}
-            <tr><td colspan="7" class="loading">No workers found</td></tr>
+            <tr><td colspan="8" class="loading">No workers found</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -206,4 +229,155 @@
       </div>
     </div>
   </section>
+
+  <!-- Page-specific JS -->
+  <script>
+    // ===== Helpers =====
+    const $ = (sel, root=document) => root.querySelector(sel);
+    const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+
+    // Bulk selection helpers
+    const rowChecks = () => $$('.worker-select');
+    const selectedIds = () => rowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
+
+    // Bind select-all (header + toolbar) -> keep them in sync
+    function bindSelectAll() {
+      const headerAll = $('#select-all-header');
+      const toolbarAll = $('#select-all-workers');
+      const sync = (checked) => { rowChecks().forEach(cb => cb.checked = checked); if (headerAll) headerAll.checked = checked; if (toolbarAll) toolbarAll.checked = checked; };
+
+      headerAll?.addEventListener('change', e => sync(e.target.checked));
+      toolbarAll?.addEventListener('change', e => sync(e.target.checked));
+      // If rows change individually, clear select-all boxes when not all selected
+      document.addEventListener('change', (e) => {
+        if (!e.target.classList?.contains('worker-select')) return;
+        const all = rowChecks();
+        const allChecked = all.length > 0 && all.every(cb => cb.checked);
+        if (headerAll) headerAll.checked = allChecked;
+        if (toolbarAll) toolbarAll.checked = allChecked;
+      });
+    }
+
+    // Render workers table rows (used by filters/search)
+    function renderWorkers(workers) {
+      const tbody = $('#workersTable');
+      if (!tbody) return;
+
+      if (!workers || workers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading">No workers found</td></tr>';
+        return;
+      }
+
+      const escape = (s) => (s==null?'':String(s)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+      );
+
+      const rows = workers.map(w => {
+        const statusHtml = w.active
+          ? '<span class="status-badge status-active">ACTIVE</span>'
+          : '<span class="status-badge status-idle">INACTIVE</span>';
+
+        const qrHtml = w.qrcode_path
+          ? `<img class="qr-thumb" src="/static/${encodeURIComponent(w.qrcode_path)}" width="40" height="40" alt="QR">`
+          : 'No QR';
+
+        return `
+          <tr>
+            <td class="checkbox-cell"><input type="checkbox" class="worker-select" data-id="${w.id}"></td>
+            <td>${escape(w.name)}</td>
+            <td><code>${escape(w.token_id)}</code></td>
+            <td><span class="department-tag">${escape(w.department || '')}</span></td>
+            <td>${escape(w.line || 'N/A')}</td>
+            <td>${statusHtml}</td>
+            <td>${qrHtml}</td>
+            <td class="actions-cell">
+              <a href="/print_qr/${w.id}" target="_blank" class="btn btn--secondary btn-sm">Print</a>
+              <a href="/download_qr/${w.id}" class="btn btn--outline btn-sm">Download</a>
+              <a href="/edit/${w.id}" class="btn btn--primary btn-sm">Edit</a>
+              <a href="/delete/${w.id}" class="btn btn--secondary btn-sm" onclick="return confirm('Are you sure you want to delete this worker?');">Delete</a>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      tbody.innerHTML = rows;
+      // rebind select-all syncing after table redraw
+      bindSelectAll();
+    }
+
+    // Fetch filtered workers
+    async function loadWorkers() {
+      const search = ($('#workerSearch')?.value || '').trim();
+      const department = $('#departmentFilter')?.value || '';
+      const status = $('#statusFilter')?.value || '';
+      const q = new URLSearchParams();
+      if (search) q.set('search', search);
+      if (department) q.set('department', department);
+      if (status) q.set('status', status);
+
+      try {
+        const res = await fetch('/api/workers' + (q.toString() ? ('?' + q.toString()) : ''));
+        if (!res.ok) throw new Error('Failed to load workers');
+        const data = await res.json();
+        renderWorkers(data);
+      } catch (err) {
+        console.error(err);
+        // leave server-rendered rows as fallback
+      }
+    }
+
+    // Debounce for search input
+    function debounce(fn, ms) {
+      let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+    }
+
+    // Bulk delete
+    async function deleteSelected() {
+      const ids = selectedIds();
+      if (ids.length === 0) { alert('No workers selected.'); return; }
+      if (!confirm(`Delete ${ids.length} worker(s)? This cannot be undone.`)) return;
+
+      try {
+        const res = await fetch('/api/workers/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        if (!res.ok) {
+          const msg = await res.json().catch(()=>({}));
+          throw new Error(msg.error || 'Delete failed');
+        }
+        // Refresh the table
+        await loadWorkers();
+      } catch (e) {
+        alert(e.message || 'Delete failed.');
+      }
+    }
+
+    // Bulk print
+    function printSelected() {
+      const ids = selectedIds();
+      if (ids.length === 0) { alert('No workers selected.'); return; }
+      const url = '/print_qrs?ids=' + ids.join(',');
+      window.open(url, '_blank');
+    }
+
+    // Wire up controls
+    window.addEventListener('DOMContentLoaded', () => {
+      bindSelectAll();
+
+      $('#btn-delete-selected')?.addEventListener('click', deleteSelected);
+      $('#btn-print-selected')?.addEventListener('click', printSelected);
+
+      const search = $('#workerSearch');
+      const dept = $('#departmentFilter');
+      const status = $('#statusFilter');
+
+      search?.addEventListener('input', debounce(loadWorkers, 250));
+      dept?.addEventListener('change', loadWorkers);
+      status?.addEventListener('change', loadWorkers);
+    });
+  </script>
 {% endblock %}

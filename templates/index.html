@@ -3,12 +3,32 @@
 {% block title %}Production Management System{% endblock %}
 
 {% block content %}
+  <!-- Small inline style just to ensure checkboxes are visible in all themes -->
+  <style>
+    .checkbox-cell { width: 48px; text-align: center; }
+    .checkbox-cell input[type="checkbox"] {
+      width: 18px; height: 18px; cursor: pointer;
+      vertical-align: middle;
+      /* improve visibility on dark bg */
+      accent-color: #3b82f6;
+    }
+    .bulk-actions {
+      display:flex; align-items:center; justify-content:space-between;
+      margin: .5rem 0 1rem;
+      gap:.75rem;
+    }
+    .bulk-actions .checkbox-all { display:flex; align-items:center; gap:.5rem; }
+    .btn--danger { background:#ef4444; color:#fff; }
+    .btn--danger:hover { filter: brightness(1.05); }
+    .qr-thumb { display:block; }
+  </style>
+
   <!-- Dashboard Section -->
   <section class="section active" id="dashboard">
     <div class="section-header">
       <h1>Dashboard</h1>
       <div class="header-actions">
-        <button id="refreshBtn" class="btn btn--secondary">Refresh</button>
+        <button id="refreshBtn" class="btn btn--secondary" type="button">Refresh</button>
         <span id="lastUpdated" class="last-updated"></span>
       </div>
     </div>
@@ -96,8 +116,8 @@
         <span>Select all</span>
       </label>
       <div class="bulk-buttons">
-        <button id="btn-delete-selected" class="btn btn--danger btn-sm">Delete selected</button>
-        <button id="btn-print-selected" class="btn btn--secondary btn-sm">Print selected</button>
+        <button id="btn-delete-selected" class="btn btn--danger btn-sm" type="button">Delete selected</button>
+        <button id="btn-print-selected" class="btn btn--secondary btn-sm" type="button">Print selected</button>
       </div>
     </div>
 
@@ -204,9 +224,9 @@
           <div id="scanResult" class="scan-result"></div>
         </div>
         <div class="scanner-controls">
-          <button id="startScan" class="btn btn--primary">Start</button>
-          <button id="stopScan" class="btn btn--secondary" disabled>Stop</button>
-          <button id="resetScan" class="btn btn--outline">Reset</button>
+          <button id="startScan" class="btn btn--primary" type="button">Start</button>
+          <button id="stopScan" class="btn btn--secondary" type="button" disabled>Stop</button>
+          <button id="resetScan" class="btn btn--outline" type="button">Reset</button>
         </div>
       </div>
       <div class="recent-scans">
@@ -225,7 +245,7 @@
       <div class="report-card">
         <h3>Production Summary</h3>
         <p>Summary report (coming soon)</p>
-        <button class="btn btn--secondary" onclick="alert('Coming soon')">Generate</button>
+        <button class="btn btn--secondary" type="button" onclick="alert('Coming soon')">Generate</button>
       </div>
     </div>
   </section>
@@ -245,7 +265,7 @@
     const getRowChecks = () => Array.from(tbody?.querySelectorAll('input.worker-select') || []);
     const selectedIds  = () => getRowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
 
-    function setAllRows(checked) { getRowChecks().forEach(cb => cb.checked = checked); }
+    function setAllRows(checked) { getRowChecks().forEach(cb => { cb.checked = checked; }); }
     function syncMasterChecks() {
       const checks = getRowChecks();
       const allChecked = checks.length > 0 && checks.every(cb => cb.checked);
@@ -311,7 +331,7 @@
     async function loadWorkers() {
       const search = ($('#workerSearch')?.value || '').trim();
       const department = $('#departmentFilter')?.value || '';
-      theStatus = $('#statusFilter')?.value || '';
+      const theStatus = $('#statusFilter')?.value || '';
       const q = new URLSearchParams();
       if (search) q.set('search', search);
       if (department) q.set('department', department);

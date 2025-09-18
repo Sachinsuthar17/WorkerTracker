@@ -1,6 +1,7 @@
 import os
 import sys
 import uuid
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from sqlalchemy import (
     DateTime, Boolean, select, func, insert, update, delete, and_, or_, text
 )
 from sqlalchemy.engine import Engine
+    # noqa: E402
 from sqlalchemy.exc import IntegrityError
 
 # -------------------------------------------------------------------
@@ -74,15 +76,34 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 MEDIA_QR_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Symlink into /static so existing paths continue to work
+# Robust symlink into /static so existing paths continue to work
 def _ensure_symlink(target: Path, link: Path):
+    """
+    Ensure 'link' is a symlink to 'target'.
+    If 'link' exists as a real directory, migrate its contents into 'target',
+    remove it, then create the symlink. Fixes broken images after redeploys.
+    """
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() or link.exists():
+        target.mkdir(parents=True, exist_ok=True)
+
+        if link.exists() and link.is_symlink():
             return
-        link.symlink_to(target, target_is_directory=True)
+
+        if link.exists() and link.is_dir() and not link.is_symlink():
+            # Move any existing files out of static/... into DATA_DIR/...
+            for child in link.iterdir():
+                dest = target / child.name
+                if child.is_dir():
+                    shutil.move(str(child), str(dest))
+                else:
+                    shutil.move(str(child), str(dest))
+            shutil.rmtree(link)
+
+        if not link.exists():
+            link.symlink_to(target, target_is_directory=True)
     except Exception as e:
-        app.logger.warning("Could not create symlink %s -> %s: %s", link, target, e)
+        app.logger.warning("Could not ensure symlink %s -> %s: %s", link, target, e)
 
 _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
 _ensure_symlink(UPLOADS_DIR, STATIC_DIR / "uploads")
@@ -104,7 +125,7 @@ workers = Table(
     Column("token_id", String(255), nullable=False, unique=True),
     Column("department", String(255), nullable=False),
     Column("line", String(255)),
-    # NOTE: no server_default here; we set default via bootstrap DDL
+    # NOTE: no server_default here; we set default via bootstrap DDL for PG
     Column("active", Boolean, nullable=False),
     Column("qrcode_path", String(512)),
     Column("qrcode_svg_path", String(512)),
@@ -270,6 +291,7 @@ def init_db():
 # -------------------------------------------------------------------
 def ci_like(column, term: str):
     """Portable case-insensitive LIKE for Postgres/SQLite. Pass a pattern like '%foo%'."""
+    # Use SQL lower(column) LIKE lower(:pattern)
     return func.lower(column).like(term.lower())
 
 def fmt_ts(v):
@@ -279,13 +301,16 @@ def fmt_ts(v):
         return str(v) if v else ""
 
 # -------------------------------------------------------------------
-# QR helpers (SVG + PNG)
+# QR helpers (SVG + PNG) + self-healing
 # -------------------------------------------------------------------
 def generate_qr_files(token_id: str, worker_id: int) -> tuple[str, str]:
     """
     Create PNG + SVG QR for token_id under persistent qrcodes/.
     Returns (png_rel_path, svg_rel_path) relative to /static (qrcodes/...).
     """
+    # make sure the symlink is correct each time we write
+    _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
+
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
     base = f"qrcode_{token_id}_{worker_id}_{ts}"
     png_path = QR_DIR / f"{base}.png"
@@ -294,6 +319,7 @@ def generate_qr_files(token_id: str, worker_id: int) -> tuple[str, str]:
     # SVG
     svg_factory = qrcode.image.svg.SvgImage
     svg_img = qrcode.make(token_id, image_factory=svg_factory)
+    svg_path.parent.mkdir(parents=True, exist_ok=True)
     svg_img.save(str(svg_path))
 
     # PNG
@@ -301,9 +327,37 @@ def generate_qr_files(token_id: str, worker_id: int) -> tuple[str, str]:
     qr.add_data(token_id)
     qr.make(fit=True)
     png_img = qr.make_image(fill_color="black", back_color="white")
+    png_path.parent.mkdir(parents=True, exist_ok=True)
     png_img.save(str(png_path), format="PNG")
 
     return f"qrcodes/{png_path.name}", f"qrcodes/{svg_path.name}"
+
+def _ensure_qr_present(conn, worker_row: dict) -> tuple[str, str]:
+    """
+    If the worker's QR PNG/SVG is missing on disk (e.g., after a deploy),
+    regenerate and update DB. Return (png_rel, svg_rel).
+    """
+    _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
+
+    png_rel = worker_row.get("qrcode_path")
+    svg_rel = worker_row.get("qrcode_svg_path")
+    needs_regen = True
+
+    if png_rel:
+        p = STATIC_DIR / png_rel  # static symlink points into DATA_DIR
+        if p.exists():
+            needs_regen = False
+
+    if needs_regen:
+        new_png_rel, new_svg_rel = generate_qr_files(worker_row["token_id"], worker_row["id"])
+        conn.execute(
+            update(workers)
+            .where(workers.c.id == worker_row["id"])
+            .values(qrcode_path=new_png_rel, qrcode_svg_path=new_svg_rel, updated_at=func.now())
+        )
+        return new_png_rel, new_svg_rel
+    else:
+        return png_rel or "", svg_rel or ""
 
 def delete_qr_files(qr_png_rel: str | None, qr_svg_rel: str | None):
     for rel in (qr_png_rel, qr_svg_rel):
@@ -325,7 +379,17 @@ def index():
         rows = conn.execute(
             select(workers).order_by(workers.c.created_at.desc())
         ).mappings().all()
-    return render_template("index.html", workers=rows)
+
+        # Self-heal missing QR files before rendering
+        fixed = []
+        for r in rows:
+            rd = dict(r)
+            png_rel, svg_rel = _ensure_qr_present(conn, rd)
+            rd["qrcode_path"] = png_rel
+            rd["qrcode_svg_path"] = svg_rel
+            fixed.append(rd)
+
+    return render_template("index.html", workers=fixed)
 
 @app.get("/dashboard")
 def dashboard():
@@ -488,17 +552,27 @@ def api_workers():
     with engine.begin() as conn:
         rows = conn.execute(stmt).mappings().all()
 
-    return jsonify([{
-        "id": r["id"],
-        "name": r["name"],
-        "token_id": r["token_id"],
-        "department": r["department"],
-        "line": r["line"],
-        "active": bool(r["active"]),
-        "qrcode_path": r["qrcode_path"],
-        "created_at": fmt_ts(r["created_at"]),
-        "updated_at": fmt_ts(r["updated_at"]),
-    } for r in rows])
+        out = []
+        for r in rows:
+            rd = dict(r)
+            # Self-heal QR before returning to the UI
+            png_rel, svg_rel = _ensure_qr_present(conn, rd)
+            rd["qrcode_path"] = png_rel
+            rd["qrcode_svg_path"] = svg_rel
+
+            out.append({
+                "id": rd["id"],
+                "name": rd["name"],
+                "token_id": rd["token_id"],
+                "department": rd["department"],
+                "line": rd["line"],
+                "active": bool(rd["active"]),
+                "qrcode_path": rd["qrcode_path"],
+                "created_at": fmt_ts(rd["created_at"]),
+                "updated_at": fmt_ts(rd["updated_at"]),
+            })
+
+    return jsonify(out)
 
 # -------------------------------------------------------------------
 # Single worker add / edit / delete / download QR
@@ -614,6 +688,15 @@ def download_qr(worker_id: int):
 
     p = STATIC_DIR / row[1]  # static symlink points to persistent disk
     if not p.exists():
+        # self-heal if someone tries to download right after a deploy
+        with engine.begin() as conn:
+            png_rel, _ = generate_qr_files(row[0], worker_id)
+            conn.execute(
+                update(workers).where(workers.c.id == worker_id).values(qrcode_path=png_rel, updated_at=func.now())
+            )
+        p = STATIC_DIR / png_rel
+
+    if not p.exists():
         flash("QR file missing on disk.", "error")
         return redirect(url_for("index"))
     return send_file(str(p), mimetype="image/png", as_attachment=True, download_name=f"qr_{row[0]}.png")
@@ -721,6 +804,8 @@ def upload_workers():
 # -------------------------------------------------------------------
 @app.get("/health")
 def health():
+    # keep the symlink correct
+    _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
     return "OK", 200
 
 # -------------------------------------------------------------------
@@ -728,6 +813,8 @@ def health():
 # -------------------------------------------------------------------
 if __name__ == "__main__":
     init_db()
+    _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
 else:
     init_db()
+    _ensure_symlink(MEDIA_QR_DIR, STATIC_DIR / "qrcodes")

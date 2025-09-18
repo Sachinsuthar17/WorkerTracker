@@ -21,7 +21,7 @@ import openpyxl
 # --- SQLAlchemy (DB-agnostic: Postgres in prod, SQLite locally) ---
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, Integer, String, Text, Float,
-    DateTime, Boolean, select, func, insert, update, delete, and_, or_, text
+    DateTime, Boolean, select, func, insert, update, delete, and_, or_
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -703,7 +703,6 @@ def print_qr(worker_id: int):
         png_rel, svg_rel = _ensure_qr_present(conn, rd)
         rd["qrcode_path"] = png_rel
         rd["qrcode_svg_path"] = svg_rel
-    # Minimal, print-friendly page
     return render_template("print_qr.html", worker=rd)
 
 @app.get("/print_qrs")
@@ -747,7 +746,6 @@ def api_workers_delete():
 
     try:
         with engine.begin() as conn:
-            # collect QR file paths first
             rows = conn.execute(
                 select(workers.c.id, workers.c.qrcode_path, workers.c.qrcode_svg_path)
                 .where(workers.c.id.in_(ids))
@@ -761,6 +759,105 @@ def api_workers_delete():
     except Exception as e:
         app.logger.error("bulk delete error: %s", e)
         return jsonify({"error": "Server error during delete"}), 500
+
+# -------------------------------------------------------------------
+# Bulk Excel upload with dedupe
+#  (explicit endpoint so url_for('upload_workers') is always found)
+# -------------------------------------------------------------------
+@app.route("/upload_workers", methods=["POST"], endpoint="upload_workers")
+@app.route("/upload_excel", methods=["POST"])
+def upload_workers():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("index"))
+
+    ext = Path(f.filename).suffix.lower()
+    if ext not in ALLOWED_XLSX_EXT:
+        flash("Invalid file. Please upload a .xlsx file.", "error")
+        return redirect(url_for("index"))
+
+    temp_path = UPLOADS_DIR / f"{uuid.uuid4()}_{secure_filename(f.filename)}"
+    f.save(temp_path)
+
+    added = skipped = invalid = 0
+    skipped_tokens: list[str] = []
+
+    try:
+        wb = openpyxl.load_workbook(temp_path)
+        ws = wb.active
+
+        header = [str(c).strip().lower() if c is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+        required = ["name", "token_id", "department", "line", "active"]
+        missing = [h for h in required if h not in header]
+        if missing:
+            flash(f"Excel missing required headers: {', '.join(missing)}", "error")
+            temp_path.unlink(missing_ok=True)
+            return redirect(url_for("index"))
+
+        idx = {h: header.index(h) for h in header}
+
+        with engine.begin() as conn:
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                try:
+                    name = (str(row[idx["name"]]).strip() if row[idx["name"]] is not None else "")
+                    token_id = (str(row[idx["token_id"]]).strip() if row[idx["token_id"]] is not None else "")
+                    department = (str(row[idx["department"]]).strip() if row[idx["department"]] is not None else "")
+                    line = (str(row[idx["line"]]).strip() if row[idx["line"]] is not None else "")
+                    active_cell = row[idx["active"]]
+                    active_bool = str(active_cell).strip().lower() in ("1", "true", "yes", "y")
+                except Exception:
+                    invalid += 1
+                    continue
+
+                if not token_id:
+                    invalid += 1
+                    continue
+
+                exists = conn.execute(
+                    select(workers.c.id).where(workers.c.token_id == token_id)
+                ).first()
+                if exists:
+                    skipped += 1
+                    if len(skipped_tokens) < 10:
+                        skipped_tokens.append(token_id)
+                    continue
+
+                res = conn.execute(insert(workers).values(
+                    name=name,
+                    token_id=token_id,
+                    department=department,
+                    line=line,
+                    active=active_bool,
+                ))
+                worker_id = res.inserted_primary_key[0]
+
+                png_rel, svg_rel = generate_qr_files(token_id, worker_id)
+                conn.execute(update(workers).where(workers.c.id == worker_id).values(
+                    qrcode_path=png_rel,
+                    qrcode_svg_path=svg_rel,
+                    updated_at=func.now()
+                ))
+                added += 1
+    except Exception as e:
+        app.logger.error("Excel processing error: %s", e)
+        flash("Error processing Excel file.", "error")
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return redirect(url_for("index"))
+
+    try:
+        temp_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    summary = f"Upload complete. Added: {added}, Skipped (duplicates): {skipped}, Invalid: {invalid}"
+    if skipped_tokens:
+        summary += f" | Skipped token_ids (first 10): {', '.join(skipped_tokens)}"
+    flash(summary, "success")
+    return redirect(url_for("index"))
 
 # -------------------------------------------------------------------
 # Health

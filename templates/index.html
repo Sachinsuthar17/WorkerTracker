@@ -3,24 +3,23 @@
 {% block title %}Production Management System{% endblock %}
 
 {% block content %}
-  <!-- Small inline style just to ensure checkboxes are visible in all themes -->
+  <!-- Make sure checkboxes are visible on dark themes / resets -->
   <style>
-    .checkbox-cell { width: 48px; text-align: center; }
-    .checkbox-cell input[type="checkbox"] {
-      width: 18px; height: 18px; cursor: pointer;
-      vertical-align: middle;
-      /* improve visibility on dark bg */
+    .checkbox-cell { width: 52px; text-align: center; }
+    .checkbox-cell input[type="checkbox"]{
+      width: 18px; height: 18px; cursor: pointer; vertical-align: middle;
+      appearance: checkbox; -webkit-appearance: checkbox; -moz-appearance: checkbox;
       accent-color: #3b82f6;
     }
     .bulk-actions {
       display:flex; align-items:center; justify-content:space-between;
-      margin: .5rem 0 1rem;
-      gap:.75rem;
+      margin:.5rem 0 1rem; gap:.75rem;
     }
     .bulk-actions .checkbox-all { display:flex; align-items:center; gap:.5rem; }
     .btn--danger { background:#ef4444; color:#fff; }
-    .btn--danger:hover { filter: brightness(1.05); }
+    .btn--danger:hover { filter:brightness(1.05); }
     .qr-thumb { display:block; }
+    #sel-count { color: var(--text-muted); font-size: .85rem; margin-left: .5rem; }
   </style>
 
   <!-- Dashboard Section -->
@@ -118,6 +117,7 @@
       <div class="bulk-buttons">
         <button id="btn-delete-selected" class="btn btn--danger btn-sm" type="button">Delete selected</button>
         <button id="btn-print-selected" class="btn btn--secondary btn-sm" type="button">Print selected</button>
+        <span id="sel-count"></span>
       </div>
     </div>
 
@@ -141,7 +141,7 @@
           {% for worker in workers %}
             <tr>
               <td class="checkbox-cell">
-                <input type="checkbox" class="worker-select" data-id="{{ worker.id }}">
+                <input type="checkbox" class="worker-select" value="{{ worker.id }}" data-id="{{ worker.id }}">
               </td>
               <td>{{ worker.name }}</td>
               <td><code>{{ worker.token_id }}</code></td>
@@ -252,48 +252,53 @@
 
   <!-- Page-specific JS -->
   <script>
-    // ===== Tiny helpers =====
-    const $ = (sel, root=document) => root.querySelector(sel);
+    // ===== Helpers =====
+    const $  = (sel, root=document) => root.querySelector(sel);
     const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
-    // Cache static elements once
-    const tbody = $('#workersTable');
-    const headerAll = $('#select-all-header');
+    const tbody      = $('#workersTable');
+    const headerAll  = $('#select-all-header');
     const toolbarAll = $('#select-all-workers');
+    const selCount   = $('#sel-count');
 
-    // Row checkbox helpers (scoped to tbody so re-renders are fine)
-    const getRowChecks = () => Array.from(tbody?.querySelectorAll('input.worker-select') || []);
+    // Always query from the document (works after re-renders)
+    const getRowChecks = () => Array.from(document.querySelectorAll('#workersTable input.worker-select'));
     const selectedIds  = () => getRowChecks().filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
 
-    function setAllRows(checked) { getRowChecks().forEach(cb => { cb.checked = checked; }); }
-    function syncMasterChecks() {
+    function updateSelCount(){
+      const n = selectedIds().length;
+      if (selCount) selCount.textContent = n ? `${n} selected` : '';
+    }
+
+    function setAllRows(checked){
+      const checks = getRowChecks();
+      for (const cb of checks){ cb.checked = checked; }
+      updateSelCount();
+    }
+
+    function syncMasterChecks(){
       const checks = getRowChecks();
       const allChecked = checks.length > 0 && checks.every(cb => cb.checked);
-      if (headerAll) headerAll.checked = allChecked;
+      if (headerAll)  headerAll.checked = allChecked;
       if (toolbarAll) toolbarAll.checked = allChecked;
-    }
-    function resetMasterChecks() {
-      if (headerAll) headerAll.checked = false;
-      if (toolbarAll) toolbarAll.checked = false;
+      updateSelCount();
     }
 
     // ===== Render workers rows (used by filters/search) =====
-    function renderWorkers(workers) {
+    function renderWorkers(workers){
       if (!tbody) return;
 
-      if (!workers || workers.length === 0) {
+      if (!workers || workers.length === 0){
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No workers found</td></tr>';
-        resetMasterChecks();
+        if (headerAll)  headerAll.checked = false;
+        if (toolbarAll) toolbarAll.checked = false;
+        updateSelCount();
         return;
       }
 
-      const escape = (s) => (s==null?'':String(s)
-        .replace(/&/g,'&amp;')
-        .replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;')
-      );
+      const esc = (s)=> (s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
 
-      const rows = workers.map(w => {
+      const rows = workers.map(w=>{
         const statusHtml = w.active
           ? '<span class="status-badge status-active">ACTIVE</span>'
           : '<span class="status-badge status-idle">INACTIVE</span>';
@@ -305,11 +310,11 @@
 
         return `
           <tr>
-            <td class="checkbox-cell"><input type="checkbox" class="worker-select" data-id="${w.id}"></td>
-            <td>${escape(w.name)}</td>
-            <td><code>${escape(w.token_id)}</code></td>
-            <td><span class="department-tag">${escape(w.department || '')}</span></td>
-            <td>${escape(w.line || 'N/A')}</td>
+            <td class="checkbox-cell"><input type="checkbox" class="worker-select" value="${w.id}" data-id="${w.id}"></td>
+            <td>${esc(w.name)}</td>
+            <td><code>${esc(w.token_id)}</code></td>
+            <td><span class="department-tag">${esc(w.department || '')}</span></td>
+            <td>${esc(w.line || 'N/A')}</td>
             <td>${statusHtml}</td>
             <td>${qrHtml}</td>
             <td class="actions-cell">
@@ -323,38 +328,38 @@
       }).join('');
 
       tbody.innerHTML = rows;
-      // after redraw, clear master checks so user intent is fresh
-      resetMasterChecks();
+      if (headerAll)  headerAll.checked = false;
+      if (toolbarAll) toolbarAll.checked = false;
+      updateSelCount();
     }
 
     // ===== Fetch filtered workers =====
-    async function loadWorkers() {
+    async function loadWorkers(){
       const search = ($('#workerSearch')?.value || '').trim();
       const department = $('#departmentFilter')?.value || '';
-      const theStatus = $('#statusFilter')?.value || '';
+      const status = $('#statusFilter')?.value || '';
       const q = new URLSearchParams();
-      if (search) q.set('search', search);
+      if (search)     q.set('search', search);
       if (department) q.set('department', department);
-      if (theStatus) q.set('status', theStatus);
+      if (status)     q.set('status', status);
 
       try {
         const res = await fetch('/api/workers' + (q.toString() ? ('?' + q.toString()) : ''));
         if (!res.ok) throw new Error('Failed to load workers');
         const data = await res.json();
         renderWorkers(data);
-      } catch (err) {
+      } catch (err){
         console.error(err);
-        // leave server-rendered rows as fallback
       }
     }
 
     // ===== Debounce =====
-    function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }
+    function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
-    // ===== Bulk delete/print =====
-    async function deleteSelected() {
+    // ===== Bulk actions =====
+    async function deleteSelected(){
       const ids = selectedIds();
-      if (ids.length === 0) { alert('No workers selected.'); return; }
+      if (ids.length === 0){ alert('No workers selected.'); return; }
       if (!confirm(`Delete ${ids.length} worker(s)? This cannot be undone.`)) return;
 
       try {
@@ -363,37 +368,41 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids })
         });
-        if (!res.ok) {
+        if (!res.ok){
           const msg = await res.json().catch(()=>({}));
           throw new Error(msg.error || 'Delete failed');
         }
         await loadWorkers();
-      } catch (e) {
+      } catch(e){
         alert(e.message || 'Delete failed.');
       }
     }
-    function printSelected() {
+
+    function printSelected(){
       const ids = selectedIds();
-      if (ids.length === 0) { alert('No workers selected.'); return; }
+      if (ids.length === 0){ alert('No workers selected.'); return; }
       window.open('/print_qrs?ids=' + ids.join(','), '_blank');
     }
 
-    // ===== Wire up once (no re-binding on re-render) =====
+    // ===== Wire up =====
     window.addEventListener('DOMContentLoaded', () => {
-      // Master checkboxes control all row checkboxes
+      // Master checkboxes
       headerAll?.addEventListener('change', e => {
         setAllRows(e.target.checked);
         if (toolbarAll) toolbarAll.checked = e.target.checked;
+        syncMasterChecks();
       });
       toolbarAll?.addEventListener('change', e => {
         setAllRows(e.target.checked);
         if (headerAll) headerAll.checked = e.target.checked;
+        syncMasterChecks();
       });
 
-      // Event delegation: any row checkbox change just updates master states
+      // Row checkbox changes (event delegation survives re-render)
       tbody?.addEventListener('change', (e) => {
         const t = e.target;
-        if (!(t instanceof HTMLInputElement) || !t.classList.contains('worker-select')) return;
+        if (!(t instanceof HTMLInputElement)) return;
+        if (!t.classList.contains('worker-select')) return;
         syncMasterChecks();
       });
 
